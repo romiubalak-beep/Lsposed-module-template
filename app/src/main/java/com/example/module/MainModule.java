@@ -1,55 +1,45 @@
-package com.example.efootballkeylogger; // تأكد من تغيير هذا إلى اسم الحزمة الخاص بمشروعك
+package com.yourname.efootballhook; // تأكد من تغيير هذا لاسم الحزمة الخاص بك
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
-import de.robv.android.xposed.callbacks.XC_LoadPackage.LoadPackageParam;
+import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
-public class MainHook implements IXposedHookLoadPackage {
+public class MainModule implements IXposedHookLoadPackage {
 
     @Override
-    public void handleLoadPackage(LoadPackageParam lpparam) throws Throwable {
-        // 1. التحقق من أننا داخل لعبة eFootball فقط (jp.konami.pesam)
+    public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
+        // التحقق من أننا داخل اللعبة المستهدفة
         if (!lpparam.packageName.equals("jp.konami.pesam")) {
             return;
         }
 
-        XposedBridge.log("EfootballKeyLogger: Loaded into eFootball!");
+        XposedBridge.log("Efootball Hook: Loaded into eFootball!");
 
         try {
-            // 2. اعتراض دالة generateAESKey داخل كلاس GameActivity
-            // الدالة تستقبل String وترجع SecretKey
+            // اعتراض دالة generateAESKey في كلاس GameActivity
             XposedHelpers.findAndHookMethod(
-                    "com.epicgames.ue4.GameActivity", // اسم الكلاس
-                    lpparam.classLoader,
+                    "com.epicgames.ue4.GameActivity", // اسم الكلاس (بدون .java)
+                    lpparam.classLoader,              // يجب تمرير ClassLoader الخاص بالتطبيق
                     "generateAESKey",                 // اسم الدالة
-                    String.class,                     // نوع المعامل (String)
+                    String.class,                     // نوع المعامل الوحيد (String)
                     new XC_MethodHook() {
                         @Override
                         protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
                             // هذا الكود ينفذ قبل الدالة الأصلية
                             String keyInput = (String) param.args[0];
                             
-                            // 3. طباعة القيمة (كلمة المرور) في اللوج
+                            // طباعة القيمة في سجل LSPosed
                             XposedBridge.log("========================================");
-                            XposedBridge.log("EfootballKeyLogger: Found CONFIGRULES_KEY Input!");
+                            XposedBridge.log("Efootball Hook: Found Key Input!");
                             XposedBridge.log("VALUE: " + keyInput);
                             XposedBridge.log("========================================");
-                        }
-
-                        @Override
-                        protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                            // يمكننا هنا رؤية المفتاح الناتج (اختياري)
-                            Object result = param.getResult();
-                            if (result != null) {
-                                XposedBridge.log("EfootballKeyLogger: Generated Key Object: " + result.toString());
-                            }
                         }
                     }
             );
         } catch (Throwable t) {
-            XposedBridge.log("EfootballKeyLogger Error: " + t.getMessage());
+            XposedBridge.log("Efootball Hook Error: " + t.getMessage());
         }
     }
 }
