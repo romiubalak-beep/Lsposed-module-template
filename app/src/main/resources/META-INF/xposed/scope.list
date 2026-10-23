@@ -1,5 +1,2 @@
-# 作用域列表，每行一个包名
-# 如果是系统模块，可以使用 'system'
-system
-# 例如:
-# com.android.systemui
+
+jp.konami.pesam
