@@ -4,7 +4,7 @@ plugins {
 
 android {
     namespace 'com.yourname.efootballhook'
-    compileSdk 34 // 可以根据需要修改
+    compileSdk 34
 
     defaultConfig {
         applicationId "com.yourname.efootballhook"
@@ -35,6 +35,6 @@ android {
 
 dependencies {
     compileOnly 'androidx.annotation:annotation:1.9.1'
-    compileOnly 'io.github.libxposed:api:100' // 请参考 libxposed 文档查看最新版本
+    compileOnly 'io.github.libxposed:api:100'
     compileOnly project(":libxposed-compat")
 }
