@@ -1,45 +1,45 @@
-package com.yourname.efootballhook; // تأكد من تغيير هذا لاسم الحزمة الخاص بك
+package com.yourname.efootballhook;
 
-import de.robv.android.xposed.IXposedHookLoadPackage;
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
-import de.robv.android.xposed.XposedHelpers;
-import de.robv.android.xposed.callbacks.XC_LoadPackage;
+import io.github.libxposed.api.XposedModule;
+import io.github.libxposed.api.XposedInterface;
+import io.github.libxposed.api.XposedModuleInterface;
 
-public class MainModule implements IXposedHookLoadPackage {
+public class MainModule extends XposedModule {
 
     @Override
-    public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
-        // التحقق من أننا داخل اللعبة المستهدفة
-        if (!lpparam.packageName.equals("jp.konami.pesam")) {
+    public void onPackageLoaded(XposedModuleInterface.PackageLoadedParam param) {
+        // التحقق من اسم الحزمة
+        if (!param.getPackageName().equals("jp.konami.pesam")) {
             return;
         }
 
-        XposedBridge.log("Efootball Hook: Loaded into eFootball!");
+        log("Efootball Hook: Loaded into eFootball!");
 
         try {
-            // اعتراض دالة generateAESKey في كلاس GameActivity
-            XposedHelpers.findAndHookMethod(
-                    "com.epicgames.ue4.GameActivity", // اسم الكلاس (بدون .java)
-                    lpparam.classLoader,              // يجب تمرير ClassLoader الخاص بالتطبيق
-                    "generateAESKey",                 // اسم الدالة
-                    String.class,                     // نوع المعامل الوحيد (String)
-                    new XC_MethodHook() {
-                        @Override
-                        protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                            // هذا الكود ينفذ قبل الدالة الأصلية
-                            String keyInput = (String) param.args[0];
-                            
-                            // طباعة القيمة في سجل LSPosed
-                            XposedBridge.log("========================================");
-                            XposedBridge.log("Efootball Hook: Found Key Input!");
-                            XposedBridge.log("VALUE: " + keyInput);
-                            XposedBridge.log("========================================");
-                        }
-                    }
-            );
+            // في API الحديث، نستخدم دالة hook() بدلاً من XposedHelpers
+            // نحتاج إلى العثور على الكلاس أولاً
+            Class<?> gameActivityClass = param.getClassLoader().loadClass("com.epicgames.ue4.GameActivity");
+            
+            // البحث عن الدالة generateAESKey
+            for (java.lang.reflect.Method method : gameActivityClass.getDeclaredMethods()) {
+                if (method.getName().equals("generateAESKey")) {
+                    // اعتراض الدالة
+                    hook(method).intercept(chain -> {
+                        // طباعة المعامل الأول (String)
+                        String keyInput = (String) chain.getArgs().get(0);
+                        log("========================================");
+                        log("Efootball Hook: Found Key Input!");
+                        log("VALUE: " + keyInput);
+                        log("========================================");
+                        
+                        // استمرار تنفيذ الدالة الأصلية
+                        return chain.proceed();
+                    });
+                    break;
+                }
+            }
         } catch (Throwable t) {
-            XposedBridge.log("Efootball Hook Error: " + t.getMessage());
+            log("Efootball Hook Error: " + t.getMessage());
         }
     }
 }
