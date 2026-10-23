@@ -1,7 +1,6 @@
-# libxposed 模块属性
-# 最小 API 版本 (libxposed)
-minApiVersion=101
-# 目标 API 版本 (libxposed)
-targetApiVersion=101
-# 是否为静态作用域
-staticScope=true
+id=efootball_keylogger
+name=Efootball Key Logger
+version=v1.0
+versionCode=1
+author=YourName
+description=Hook eFootball AES Key
