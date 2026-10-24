@@ -1,6 +1,2 @@
-id=efootball_keylogger
-name=Efootball Key Logger
-version=v1.0
-versionCode=1
-author=YourName
-description=Hook eFootball AES Key
+minApiVersion=101
+targetApiVersion=101
