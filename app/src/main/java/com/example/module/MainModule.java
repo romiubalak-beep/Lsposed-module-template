@@ -1,9 +1,8 @@
-package com.example.module; // تأكد من تغيير هذا لاسم حزمتك في build.gradle
+package com.example.module; // تأكد من تغيير هذا لاسم حزمتك
 
 import android.util.Log;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
-import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedModuleInterface;
 
@@ -16,18 +15,14 @@ public class MainModule extends XposedModule {
     }
 
     @Override
-    public void onPackageLoaded(XposedModuleInterface.PackageLoadedParam param) {
+    public void onPackageReady(XposedModuleInterface.PackageReadyParam param) {
         if (!param.getPackageName().equals(TARGET_PACKAGE)) return;
 
         log(Log.INFO, TAG, "Module loaded for: " + param.getPackageName());
-        
+
         hookSecretKeySpec(param);
         hookIvParameterSpec(param);
         hookCipherDoFinal(param);
-    }
-
-    private void log(int priority, String tag, String msg) {
-        Log.println(priority, tag, msg);
     }
 
     private String bytesToHex(byte[] bytes) {
@@ -40,11 +35,11 @@ public class MainModule extends XposedModule {
     }
 
     // 1. اعتراض إنشاء المفتاح
-    private void hookSecretKeySpec(XposedModuleInterface.PackageLoadedParam param) {
+    private void hookSecretKeySpec(XposedModuleInterface.PackageReadyParam param) {
         try {
             Class<?> clazz = param.getClassLoader().loadClass("javax.crypto.spec.SecretKeySpec");
             Constructor<?> constructor = clazz.getConstructor(byte[].class, String.class);
-            
+
             hook(constructor).intercept(chain -> {
                 byte[] key = (byte[]) chain.getArgs().get(0);
                 String algo = (String) chain.getArgs().get(1);
@@ -57,11 +52,11 @@ public class MainModule extends XposedModule {
     }
 
     // 2. اعتراض متجه التهيئة
-    private void hookIvParameterSpec(XposedModuleInterface.PackageLoadedParam param) {
+    private void hookIvParameterSpec(XposedModuleInterface.PackageReadyParam param) {
         try {
             Class<?> clazz = param.getClassLoader().loadClass("javax.crypto.spec.IvParameterSpec");
             Constructor<?> constructor = clazz.getConstructor(byte[].class);
-            
+
             hook(constructor).intercept(chain -> {
                 byte[] iv = (byte[]) chain.getArgs().get(0);
                 log(Log.INFO, TAG, "[IvParameterSpec] IV: " + bytesToHex(iv));
@@ -73,17 +68,17 @@ public class MainModule extends XposedModule {
     }
 
     // 3. اعتراض التشفير/فك التشفير
-    private void hookCipherDoFinal(XposedModuleInterface.PackageLoadedParam param) {
+    private void hookCipherDoFinal(XposedModuleInterface.PackageReadyParam param) {
         try {
             Class<?> clazz = param.getClassLoader().loadClass("javax.crypto.Cipher");
             Method method = clazz.getMethod("doFinal", byte[].class);
-            
+
             hook(method).intercept(chain -> {
                 byte[] input = (byte[]) chain.getArgs().get(0);
                 log(Log.INFO, TAG, "[Cipher.doFinal] Input: " + bytesToHex(input));
-                
+
                 Object result = chain.proceed();
-                
+
                 if (result instanceof byte[]) {
                     log(Log.INFO, TAG, "[Cipher.doFinal] Result: " + bytesToHex((byte[]) result));
                 }
