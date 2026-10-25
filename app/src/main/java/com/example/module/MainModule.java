@@ -1,81 +1,40 @@
-import de.robv.android.xposed.IXposedHookLoadPackage;
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
-import de.robv.android.xposed.XposedHelpers;
-import de.robv.android.xposed.callbacks.XC_LoadPackage;
-import javax.crypto.Cipher;
-import javax.crypto.spec.SecretKeySpec;
-import javax.crypto.spec.IvParameterSpec;
+package com.example.module; // تأكد من تغيير هذا لاسم حزمتك
 
-public class MainModule implements IXposedHookLoadPackage {
+import android.util.Log;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
+import java.util.Arrays;
+import io.github.libxposed.api.XposedInterface;
+import io.github.libxposed.api.XposedModule;
+import io.github.libxposed.api.XposedModuleInterface;
+
+public class MainModule extends XposedModule {
     private static final String TAG = "CryptoHook";
 
+    public MainModule() {
+        super();
+        // لا حاجة لاستدعاء أي شيء هنا
+    }
+
     @Override
-    public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) {
-        // استهدف التطبيق المحدد فقط لتجنب إبطاء النظام
-        if (!lpparam.packageName.equals("jp.konami.pesam")) return;
+    public void onPackageLoaded(XposedModuleInterface.PackageLoadedParam param) {
+        // التحقق من أن التطبيق المستهدف هو اللعبة
+        if (!param.getPackageName().equals("jp.konami.pesam")) return;
+
+        log(Log.INFO, TAG, "Module loaded for: " + param.getPackageName());
         
-        XposedBridge.log(TAG + " Module loaded for: " + lpparam.packageName);
-        hookCrypto(lpparam);
+        // استدعاء دوال الاعتراض
+        hookSecretKeySpec(param);
+        hookIvParameterSpec(param);
+        hookCipherDoFinal(param);
     }
 
-    private void hookCrypto(XC_LoadPackage.LoadPackageParam lpparam) {
-        try {
-            // 1. اعتراض إنشاء المفتاح (SecretKeySpec)
-            XposedHelpers.findAndHookConstructor(
-                "javax.crypto.spec.SecretKeySpec", 
-                lpparam.classLoader,
-                byte[].class, String.class,
-                new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) {
-                        byte[] key = (byte[]) param.args[0];
-                        String algo = (String) param.args[1];
-                        XposedBridge.log(TAG + " [SecretKeySpec] Algo: " + algo + " Key: " + bytesToHex(key));
-                    }
-                }
-            );
-
-            // 2. اعتراض إنشاء متجه التهيئة (IvParameterSpec)
-            XposedHelpers.findAndHookConstructor(
-                "javax.crypto.spec.IvParameterSpec",
-                lpparam.classLoader,
-                byte[].class,
-                new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) {
-                        byte[] iv = (byte[]) param.args[0];
-                        XposedBridge.log(TAG + " [IvParameterSpec] IV: " + bytesToHex(iv));
-                    }
-                }
-            );
-
-            // 3. اعتراض عملية التشفير/فك التشفير النهائية (Cipher.doFinal)
-            XposedHelpers.findAndHookMethod(
-                "javax.crypto.Cipher", 
-                lpparam.classLoader, 
-                "doFinal", 
-                byte[].class, 
-                new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) {
-                        byte[] input = (byte[]) param.args[0];
-                        XposedBridge.log(TAG + " [Cipher.doFinal] Input: " + bytesToHex(input));
-                    }
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) {
-                        byte[] result = (byte[]) param.getResult();
-                        XposedBridge.log(TAG + " [Cipher.doFinal] Result: " + bytesToHex(result));
-                    }
-                }
-            );
-
-        } catch (Throwable t) {
-            XposedBridge.log(TAG + " Error setting hooks: " + t.getMessage());
-        }
+    // دالة مساعدة للطباعة
+    private void log(int priority, String tag, String msg) {
+        Log.println(priority, tag, msg);
     }
 
-    // دالة مساعدة لتحويل البايتات إلى نص سداسي عشري (Hex) مقروء
+    // دالة مساعدة لتحويل البايتات إلى Hex
     private String bytesToHex(byte[] bytes) {
         if (bytes == null) return "null";
         StringBuilder sb = new StringBuilder();
@@ -83,5 +42,63 @@ public class MainModule implements IXposedHookLoadPackage {
             sb.append(String.format("%02x", b));
         }
         return sb.toString();
+    }
+
+    // 1. اعتراض إنشاء المفتاح (SecretKeySpec)
+    private void hookSecretKeySpec(XposedModuleInterface.PackageLoadedParam param) {
+        try {
+            Class<?> clazz = param.getClassLoader().loadClass("javax.crypto.spec.SecretKeySpec");
+            Constructor<?> constructor = clazz.getConstructor(byte[].class, String.class);
+            
+            hook(constructor).intercept(chain -> {
+                Object[] args = chain.getArgs().toArray();
+                byte[] key = (byte[]) args[0];
+                String algo = (String) args[1];
+                log(Log.INFO, TAG, "[SecretKeySpec] Algo: " + algo + " Key: " + bytesToHex(key));
+                return chain.proceed();
+            });
+        } catch (Throwable t) {
+            log(Log.ERROR, TAG, "Error hooking SecretKeySpec: " + t.getMessage());
+        }
+    }
+
+    // 2. اعتراض إنشاء متجه التهيئة (IvParameterSpec)
+    private void hookIvParameterSpec(XposedModuleInterface.PackageLoadedParam param) {
+        try {
+            Class<?> clazz = param.getClassLoader().loadClass("javax.crypto.spec.IvParameterSpec");
+            Constructor<?> constructor = clazz.getConstructor(byte[].class);
+            
+            hook(constructor).intercept(chain -> {
+                Object[] args = chain.getArgs().toArray();
+                byte[] iv = (byte[]) args[0];
+                log(Log.INFO, TAG, "[IvParameterSpec] IV: " + bytesToHex(iv));
+                return chain.proceed();
+            });
+        } catch (Throwable t) {
+            log(Log.ERROR, TAG, "Error hooking IvParameterSpec: " + t.getMessage());
+        }
+    }
+
+    // 3. اعتراض عملية التشفير/فك التشفير النهائية (Cipher.doFinal)
+    private void hookCipherDoFinal(XposedModuleInterface.PackageLoadedParam param) {
+        try {
+            Class<?> clazz = param.getClassLoader().loadClass("javax.crypto.Cipher");
+            Method method = clazz.getMethod("doFinal", byte[].class);
+            
+            hook(method).intercept(chain -> {
+                Object[] args = chain.getArgs().toArray();
+                byte[] input = (byte[]) args[0];
+                log(Log.INFO, TAG, "[Cipher.doFinal] Input: " + bytesToHex(input));
+                
+                Object result = chain.proceed();
+                
+                if (result instanceof byte[]) {
+                    log(Log.INFO, TAG, "[Cipher.doFinal] Result: " + bytesToHex((byte[]) result));
+                }
+                return result;
+            });
+        } catch (Throwable t) {
+            log(Log.ERROR, TAG, "Error hooking Cipher.doFinal: " + t.getMessage());
+        }
     }
 }
