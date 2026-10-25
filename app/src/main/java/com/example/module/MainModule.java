@@ -1,4 +1,4 @@
-package com.example.module; // تأكد من تغيير هذا لاسم حزمتك
+package  com.yourname.efootballhook.MainModule
 
 import android.util.Log;
 import java.lang.reflect.Constructor;
