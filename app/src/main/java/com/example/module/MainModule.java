@@ -1,40 +1,35 @@
-package  com.yourname.efootballhook.MainModule
+package com.example.module; // تأكد من تغيير هذا لاسم حزمتك في build.gradle
 
 import android.util.Log;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
-import java.util.Arrays;
 import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedModuleInterface;
 
 public class MainModule extends XposedModule {
     private static final String TAG = "CryptoHook";
+    private static final String TARGET_PACKAGE = "jp.konami.pesam";
 
     public MainModule() {
         super();
-        // لا حاجة لاستدعاء أي شيء هنا
     }
 
     @Override
     public void onPackageLoaded(XposedModuleInterface.PackageLoadedParam param) {
-        // التحقق من أن التطبيق المستهدف هو اللعبة
-        if (!param.getPackageName().equals("jp.konami.pesam")) return;
+        if (!param.getPackageName().equals(TARGET_PACKAGE)) return;
 
         log(Log.INFO, TAG, "Module loaded for: " + param.getPackageName());
         
-        // استدعاء دوال الاعتراض
         hookSecretKeySpec(param);
         hookIvParameterSpec(param);
         hookCipherDoFinal(param);
     }
 
-    // دالة مساعدة للطباعة
     private void log(int priority, String tag, String msg) {
         Log.println(priority, tag, msg);
     }
 
-    // دالة مساعدة لتحويل البايتات إلى Hex
     private String bytesToHex(byte[] bytes) {
         if (bytes == null) return "null";
         StringBuilder sb = new StringBuilder();
@@ -44,16 +39,15 @@ public class MainModule extends XposedModule {
         return sb.toString();
     }
 
-    // 1. اعتراض إنشاء المفتاح (SecretKeySpec)
+    // 1. اعتراض إنشاء المفتاح
     private void hookSecretKeySpec(XposedModuleInterface.PackageLoadedParam param) {
         try {
             Class<?> clazz = param.getClassLoader().loadClass("javax.crypto.spec.SecretKeySpec");
             Constructor<?> constructor = clazz.getConstructor(byte[].class, String.class);
             
             hook(constructor).intercept(chain -> {
-                Object[] args = chain.getArgs().toArray();
-                byte[] key = (byte[]) args[0];
-                String algo = (String) args[1];
+                byte[] key = (byte[]) chain.getArgs().get(0);
+                String algo = (String) chain.getArgs().get(1);
                 log(Log.INFO, TAG, "[SecretKeySpec] Algo: " + algo + " Key: " + bytesToHex(key));
                 return chain.proceed();
             });
@@ -62,15 +56,14 @@ public class MainModule extends XposedModule {
         }
     }
 
-    // 2. اعتراض إنشاء متجه التهيئة (IvParameterSpec)
+    // 2. اعتراض متجه التهيئة
     private void hookIvParameterSpec(XposedModuleInterface.PackageLoadedParam param) {
         try {
             Class<?> clazz = param.getClassLoader().loadClass("javax.crypto.spec.IvParameterSpec");
             Constructor<?> constructor = clazz.getConstructor(byte[].class);
             
             hook(constructor).intercept(chain -> {
-                Object[] args = chain.getArgs().toArray();
-                byte[] iv = (byte[]) args[0];
+                byte[] iv = (byte[]) chain.getArgs().get(0);
                 log(Log.INFO, TAG, "[IvParameterSpec] IV: " + bytesToHex(iv));
                 return chain.proceed();
             });
@@ -79,15 +72,14 @@ public class MainModule extends XposedModule {
         }
     }
 
-    // 3. اعتراض عملية التشفير/فك التشفير النهائية (Cipher.doFinal)
+    // 3. اعتراض التشفير/فك التشفير
     private void hookCipherDoFinal(XposedModuleInterface.PackageLoadedParam param) {
         try {
             Class<?> clazz = param.getClassLoader().loadClass("javax.crypto.Cipher");
             Method method = clazz.getMethod("doFinal", byte[].class);
             
             hook(method).intercept(chain -> {
-                Object[] args = chain.getArgs().toArray();
-                byte[] input = (byte[]) args[0];
+                byte[] input = (byte[]) chain.getArgs().get(0);
                 log(Log.INFO, TAG, "[Cipher.doFinal] Input: " + bytesToHex(input));
                 
                 Object result = chain.proceed();
