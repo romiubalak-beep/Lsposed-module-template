@@ -1,4 +1,4 @@
-package com.example.module;
+package com.yourname.efootballhook;
 
 import android.util.Log;
 import io.github.libxposed.api.XposedModule;
