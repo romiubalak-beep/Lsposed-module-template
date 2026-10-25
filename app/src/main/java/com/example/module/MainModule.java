@@ -1,67 +1,62 @@
-package com.yourname.efootballhook;
+package com.example.efootballhook; // تأكد من تغيير هذا إلى اسم الحزمة الخاص بك
 
-import android.util.Log;
-import io.github.libxposed.api.XposedModule;
-import io.github.libxposed.api.XposedModuleInterface;
-import java.lang.reflect.Method;
-import java.util.Arrays;
+import de.robv.android.xposed.IXposedHookLoadPackage;
+import de.robv.android.xposed.XC_MethodHook;
+import de.robv.android.xposed.XposedBridge;
+import de.robv.android.xposed.XposedHelpers;
+import de.robv.android.xposed.callbacks.XC_LoadPackage.LoadPackageParam;
 
-public class MainModule extends XposedModule {
+public class MainModule implements IXposedHookLoadPackage {
 
     @Override
-    public void onPackageReady(XposedModuleInterface.PackageReadyParam param) {
-        if (!param.getPackageName().equals("jp.konami.pesam")) {
+    public void handleLoadPackage(LoadPackageParam lpparam) throws Throwable {
+        // 1. التحقق من أننا داخل لعبة eFootball فقط
+        if (!lpparam.packageName.equals("jp.konami.pesam")) {
             return;
         }
 
-        log(Log.INFO, "EfootballHook", "Loaded into eFootball!");
+        XposedBridge.log("EfootballHook: Loaded into eFootball!");
 
+        // 2. اعتراض دالة توليد المفتاح (لرؤية كلمة المرور)
         try {
-            ClassLoader classLoader = param.getClassLoader();
-            Class<?> gameActivityClass = classLoader.loadClass("com.epicgames.ue4.GameActivity");
-
-            // البحث عن دالة nativeSetConfigRulesVariables
-            for (Method method : gameActivityClass.getDeclaredMethods()) {
-                if (method.getName().equals("nativeSetConfigRulesVariables")) {
-                    
-                    log(Log.INFO, "EfootballHook", "Found nativeSetConfigRulesVariables, hooking...");
-
-                    // اعتراض الدالة
-                    hook(method).intercept(chain -> {
-                        // المعامل الأول (index 0) هو String[] strArr
-                        Object[] args = chain.getArgs().toArray();
-                        if (args.length > 0 && args[0] instanceof String[]) {
-                            String[] strArr = (String[]) args[0];
-                            
-                            log(Log.INFO, "EfootballHook", "========================================");
-                            log(Log.INFO, "EfootballHook", "nativeSetConfigRulesVariables called!");
-                            
-                            // طباعة المصفوفة كاملة
-                            for (int i = 0; i < strArr.length; i += 2) {
-                                if (i + 1 < strArr.length) {
-                                    String key = strArr[i];
-                                    String value = strArr[i + 1];
-                                    
-                                    // طباعة كل زوج
-                                    log(Log.INFO, "EfootballHook", "KEY: " + key + " | VALUE: " + value);
-                                    
-                                    // تمييز CONFIGRULES_KEY إذا وجد
-                                    if ("CONFIGRULES_KEY".equals(key)) {
-                                        log(Log.ERROR, "EfootballHook", ">>> FOUND CONFIGRULES_KEY: " + value + " <<<");
-                                    }
-                                }
-                            }
-                            log(Log.INFO, "EfootballHook", "========================================");
+            XposedHelpers.findAndHookMethod(
+                    "com.epicgames.ue4.GameActivity",
+                    lpparam.classLoader,
+                    "generateAESKey",
+                    String.class,
+                    new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                            String password = (String) param.args[0];
+                            XposedBridge.log("========================================");
+                            XposedBridge.log("EfootballHook: generateAESKey INPUT: " + password);
+                            XposedBridge.log("========================================");
                         }
-                        
-                        // استمرار تنفيذ الدالة الأصلية
-                        return chain.proceed();
-                    });
-                    break;
-                }
-            }
+                    }
+            );
         } catch (Throwable t) {
-            log(Log.ERROR, "EfootballHook", "Hook Error: " + t.getMessage());
+            XposedBridge.log("EfootballHook: Failed to hook generateAESKey: " + t.getMessage());
+        }
+
+        // 3. اعتراض دالة فك التشفير (لرؤية البيانات التي يتم فك تشفيرها)
+        try {
+            XposedHelpers.findAndHookMethod(
+                    "com.criware.vod.CriAesDecryptor",
+                    lpparam.classLoader,
+                    "Decrypt",
+                    byte[].class, int.class, byte[].class, boolean.class,
+                    new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                            byte[] data = (byte[]) param.args[0];
+                            int length = (int) param.args[1];
+                            XposedBridge.log("EfootballHook: Decrypt called with data length: " + length);
+                            // يمكنك هنا طباعة البيانات كـ Hex أو String (قد تكون مشفرة)
+                        }
+                    }
+            );
+        } catch (Throwable t) {
+            XposedBridge.log("EfootballHook: Failed to hook Decrypt: " + t.getMessage());
         }
     }
 }
