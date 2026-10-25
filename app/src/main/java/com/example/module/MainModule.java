@@ -18,7 +18,7 @@ public class MainModule extends XposedModule {
 
         Log.i(TAG, "Module loaded. Loading native library...");
         try {
-            // تحميل المكتبة الأصلية التي تحتوي على native_init
+            // تحميل المكتبة الأصلية التي تحتوي على JNI_OnLoad
             System.loadLibrary("native_hook");
         } catch (Throwable t) {
             Log.e(TAG, "Failed to load native library: " + t.getMessage());
