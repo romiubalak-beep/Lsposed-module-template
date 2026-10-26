@@ -57,5 +57,5 @@ dependencies {
     compileOnly 'io.github.libxposed:api:101.0.1'
     compileOnly project(":libxposed-compat")
 
-    implementation 'com.bytedance.android:shadowhook:2.0.1'
+    implementation 'com.bytedance.android:shadowhook:1.1.1'  // بدلاً من 2.0.1
 }
