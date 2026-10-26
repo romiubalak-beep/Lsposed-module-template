@@ -10,7 +10,6 @@ public class MainModule extends XposedModule {
     private static final String TAG = "NativeCryptoHook";
     private static final String TARGET_PACKAGE = "jp.konami.pesam";
     private static final String MODULE_PACKAGE = "com.yourname.efootballhook";
-    private static final String HARDCODED_SO_PATH = "/data/local/tmp/libnative_hook.so";
 
     public MainModule() {
         super();
@@ -31,40 +30,22 @@ public class MainModule extends XposedModule {
 
             Log.i(TAG, "Loading: " + soPath);
             System.load(soPath);
-            Log.i(TAG, "Native library loaded successfully");
-
-            // استدعِ native_init يدوياً
-            try {
-                System.loadLibrary("native_hook_stub"); // لا يفعل شيئاً، مجرد placeholder
-            } catch (Throwable ignored) {}
-
-            // الطريقة الأضمن: استدعِ native_init عبر JNI
-            try {
-                Class<?> cls = Class.forName("com.yourname.efootballhook.MainModule");
-                java.lang.reflect.Method m = cls.getDeclaredMethod("nativeInit");
-                m.setAccessible(true);
-                m.invoke(null);
-                Log.i(TAG, "nativeInit invoked");
-            } catch (Throwable t) {
-                Log.w(TAG, "nativeInit invoke failed: " + t.getMessage());
-            }
+            Log.i(TAG, "Native library loaded successfully (JNI_OnLoad will start native_init)");
 
         } catch (Throwable t) {
             Log.e(TAG, "Failed to load native library: " + t.getMessage(), t);
         }
     }
 
-    // دالة JNI — سيتم استدعاؤها من native_hook.cpp
-    private static native void nativeInit();
-
     private String resolveSoPath() {
-        // 1) مسار ثابت (الأسهل)
-        if (new java.io.File(HARDCODED_SO_PATH).exists()) {
-            Log.i(TAG, "Using hardcoded path: " + HARDCODED_SO_PATH);
-            return HARDCODED_SO_PATH;
+        // 1) المسار الثابت (الأسهل للاختبار)
+        String hardcoded = "/data/local/tmp/libnative_hook.so";
+        if (new java.io.File(hardcoded).exists()) {
+            Log.i(TAG, "Using hardcoded path: " + hardcoded);
+            return hardcoded;
         }
 
-        // 2) عبر PackageManager
+        // 2) عبر PackageManager (للاستخدام الدائم)
         try {
             Class<?> atClass = Class.forName("android.app.ActivityThread");
             Object at = atClass.getMethod("currentActivityThread").invoke(null);
@@ -99,7 +80,8 @@ public class MainModule extends XposedModule {
 
             java.io.File cacheDir = ctx.getCacheDir();
             if (cacheDir == null) cacheDir = new java.io.File("/data/local/tmp");
-            java.io.File outFile = new java.io.File(cacheDir, "libnative_hook.so");
+            java.io.File outFile = new java.io.File(cacheDir, "libnative_hook_"
+                    + System.currentTimeMillis() + ".so");
 
             java.io.InputStream is = zip.getInputStream(entry);
             java.io.FileOutputStream fos = new java.io.FileOutputStream(outFile);
