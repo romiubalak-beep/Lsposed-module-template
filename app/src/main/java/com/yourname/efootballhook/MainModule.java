@@ -10,6 +10,7 @@ public class MainModule extends XposedModule {
     private static final String TAG = "NativeCryptoHook";
     private static final String TARGET_PACKAGE = "jp.konami.pesam";
     private static final String MODULE_PACKAGE = "com.yourname.efootballhook";
+    private static final String HARDCODED_SO_PATH = "/data/local/tmp/libnative_hook.so";
 
     public MainModule() {
         super();
@@ -30,23 +31,40 @@ public class MainModule extends XposedModule {
 
             Log.i(TAG, "Loading: " + soPath);
             System.load(soPath);
-            Log.i(TAG, "✅ Native library loaded successfully");
+            Log.i(TAG, "Native library loaded successfully");
 
-            // بعد التحميل، استدعِ native_init يدوياً
+            // استدعِ native_init يدوياً
             try {
-                // native_init موجودة في المكتبة المحملة
-                Class<?> cls = Class.forName("com.yourname.efootballhook.NativeBridge");
-                // لكن الأسهل: استخدام JNI لاستدعاء native_init
-                // الطريقة الأنظف: System.loadLibrary سيستدعي JNI_OnLoad تلقائياً
-                // لكن native_init لا تُستدعى تلقائياً، لذلك نستخدم JNI
+                System.loadLibrary("native_hook_stub"); // لا يفعل شيئاً، مجرد placeholder
             } catch (Throwable ignored) {}
+
+            // الطريقة الأضمن: استدعِ native_init عبر JNI
+            try {
+                Class<?> cls = Class.forName("com.yourname.efootballhook.MainModule");
+                java.lang.reflect.Method m = cls.getDeclaredMethod("nativeInit");
+                m.setAccessible(true);
+                m.invoke(null);
+                Log.i(TAG, "nativeInit invoked");
+            } catch (Throwable t) {
+                Log.w(TAG, "nativeInit invoke failed: " + t.getMessage());
+            }
+
         } catch (Throwable t) {
             Log.e(TAG, "Failed to load native library: " + t.getMessage(), t);
         }
     }
 
+    // دالة JNI — سيتم استدعاؤها من native_hook.cpp
+    private static native void nativeInit();
+
     private String resolveSoPath() {
-        // المحاولة 1: عبر PackageManager
+        // 1) مسار ثابت (الأسهل)
+        if (new java.io.File(HARDCODED_SO_PATH).exists()) {
+            Log.i(TAG, "Using hardcoded path: " + HARDCODED_SO_PATH);
+            return HARDCODED_SO_PATH;
+        }
+
+        // 2) عبر PackageManager
         try {
             Class<?> atClass = Class.forName("android.app.ActivityThread");
             Object at = atClass.getMethod("currentActivityThread").invoke(null);
@@ -59,20 +77,11 @@ public class MainModule extends XposedModule {
                                         | PackageManager.MATCH_DISABLED_COMPONENTS);
                 if (ai != null && ai.sourceDir != null) {
                     Log.i(TAG, "Resolved via PackageManager: " + ai.sourceDir);
-                    // استخرج .so إلى مجلد مؤقت لتجنب مشاكل System.load مع !/
-                    String extractedPath = extractSoFromApk(ai.sourceDir, ctx);
-                    if (extractedPath != null) return extractedPath;
+                    return extractSoFromApk(ai.sourceDir, ctx);
                 }
             }
         } catch (Throwable t) {
             Log.w(TAG, "PackageManager method failed: " + t.getMessage());
-        }
-
-        // المحاولة 2: مسار ثابت (للتجربة فقط)
-        String hardcoded = "/data/local/tmp/libnative_hook.so";
-        if (new java.io.File(hardcoded).exists()) {
-            Log.i(TAG, "Using hardcoded extracted path");
-            return hardcoded;
         }
 
         return null;
