@@ -148,19 +148,18 @@ static void* install_hooks_thread(void* arg) {
     // Hook Create @ 0x8c06138
     void* create_addr = (void*)(base + 0x8c06138);
     LOGI("Hooking Create @ %p (via Vector hook_func)", create_addr);
-    int r1 = g_api->hook_func(create_addr, (void*)hooked_create, (void**)&original_create);
-    LOGI("hook_func(Create) returned %d, original=%p", r1, (void*)original_create);
+    void* r1 = g_api->hook_func(create_addr, (void*)hooked_create, (void**)&original_create);
+    LOGI("hook_func(Create) returned %p, original=%p", r1, (void*)original_create);
 
     // Hook Decrypt @ 0x8c06a5c
     void* decrypt_addr = (void*)(base + 0x8c06a5c);
     LOGI("Hooking Decrypt @ %p (via Vector hook_func)", decrypt_addr);
-    int r2 = g_api->hook_func(decrypt_addr, (void*)hooked_decrypt, (void**)&original_decrypt);
-    LOGI("hook_func(Decrypt) returned %d, original=%p", r2, (void*)original_decrypt);
+    void* r2 = g_api->hook_func(decrypt_addr, (void*)hooked_decrypt, (void**)&original_decrypt);
+    LOGI("hook_func(Decrypt) returned %p, original=%p", r2, (void*)original_decrypt);
 
     LOGI("All hooks installed via Vector hook_func.");
     return nullptr;
 }
-
 // ============================================================
 //  native_init - نقطة الدخول الرسمية (يستدعيها Vector)
 // ============================================================
