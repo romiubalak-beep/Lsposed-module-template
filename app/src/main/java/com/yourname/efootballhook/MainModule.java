@@ -37,39 +37,84 @@ public class MainModule extends XposedModule {
         }
     }
 
+    /**
+     * استخراج .so من APK الوحدة إلى cacheDir الخاص باللعبة.
+     * cacheDir يسمح بتعيين executable، بخلاف /data/local/tmp/.
+     */
     private String resolveSoPath() {
-        // 1) المسار الثابت (الأسهل للاختبار)
-        String hardcoded = "/data/local/tmp/libnative_hook.so";
-        if (new java.io.File(hardcoded).exists()) {
-            Log.i(TAG, "Using hardcoded path: " + hardcoded);
-            return hardcoded;
-        }
-
-        // 2) عبر PackageManager (للاستخدام الدائم)
         try {
+            // 1) احصل على Context للنظام
             Class<?> atClass = Class.forName("android.app.ActivityThread");
             Object at = atClass.getMethod("currentActivityThread").invoke(null);
             android.content.Context ctx = (android.content.Context)
                     atClass.getMethod("getSystemContext").invoke(at);
-            if (ctx != null) {
+            if (ctx == null) {
+                Log.e(TAG, "System context is null");
+                return null;
+            }
+
+            // 2) احصل على مسار APK الوحدة
+            String apkPath = null;
+            try {
                 ApplicationInfo ai = ctx.getPackageManager()
                         .getApplicationInfo(MODULE_PACKAGE,
                                 PackageManager.MATCH_UNINSTALLED_PACKAGES
                                         | PackageManager.MATCH_DISABLED_COMPONENTS);
                 if (ai != null && ai.sourceDir != null) {
-                    Log.i(TAG, "Resolved via PackageManager: " + ai.sourceDir);
-                    return extractSoFromApk(ai.sourceDir, ctx);
+                    apkPath = ai.sourceDir;
+                }
+            } catch (Throwable t) {
+                Log.w(TAG, "PackageManager failed: " + t.getMessage());
+            }
+
+            // 3) fallback: ابحث في /data/app
+            if (apkPath == null) {
+                java.io.File appDir = new java.io.File("/data/app");
+                java.io.File[] dirs = appDir.listFiles();
+                if (dirs != null) {
+                    for (java.io.File d : dirs) {
+                        if (d.getName().contains(MODULE_PACKAGE)) {
+                            java.io.File[] files = d.listFiles();
+                            if (files != null) {
+                                for (java.io.File f : files) {
+                                    if (f.getName().equals("base.apk")) {
+                                        apkPath = f.getAbsolutePath();
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
-        } catch (Throwable t) {
-            Log.w(TAG, "PackageManager method failed: " + t.getMessage());
-        }
 
-        return null;
-    }
+            if (apkPath == null) {
+                Log.e(TAG, "Could not find module APK");
+                return null;
+            }
+            Log.i(TAG, "Module APK: " + apkPath);
 
-    private String extractSoFromApk(String apkPath, android.content.Context ctx) {
-        try {
+            // 4) استخرج .so إلى cacheDir الخاص بالعملية الحالية (اللعبة)
+            //    ⚠️ getCacheDir() من ctx (system context) يعطي cache للنظام،
+            //    لذا نستخدم مسار cache اللعبة مباشرة:
+            //    /data/user/0/jp.konami.pesam/cache/
+            java.io.File cacheDir = new java.io.File(
+                    "/data/user/0/" + TARGET_PACKAGE + "/cache");
+            if (!cacheDir.exists()) {
+                // fallback: استخدم ctx.getCacheDir() (قد يكون cache النظام)
+                cacheDir = ctx.getCacheDir();
+            }
+            if (cacheDir == null || !cacheDir.canWrite()) {
+                Log.e(TAG, "Cache dir not writable: " + cacheDir);
+                return null;
+            }
+            Log.i(TAG, "Using cache dir: " + cacheDir.getAbsolutePath());
+
+            // 5) اسم فريد لتجنب التخزين المؤقت
+            java.io.File outFile = new java.io.File(cacheDir,
+                    "libnative_hook_" + System.currentTimeMillis() + ".so");
+
+            // 6) استخرج .so من APK
             java.util.zip.ZipFile zip = new java.util.zip.ZipFile(apkPath);
             java.util.zip.ZipEntry entry = zip.getEntry("lib/arm64-v8a/libnative_hook.so");
             if (entry == null) {
@@ -77,11 +122,6 @@ public class MainModule extends XposedModule {
                 zip.close();
                 return null;
             }
-
-            java.io.File cacheDir = ctx.getCacheDir();
-            if (cacheDir == null) cacheDir = new java.io.File("/data/local/tmp");
-            java.io.File outFile = new java.io.File(cacheDir, "libnative_hook_"
-                    + System.currentTimeMillis() + ".so");
 
             java.io.InputStream is = zip.getInputStream(entry);
             java.io.FileOutputStream fos = new java.io.FileOutputStream(outFile);
@@ -92,12 +132,14 @@ public class MainModule extends XposedModule {
             fos.close();
             zip.close();
 
+            // 7) اضبط الصلاحيات
             outFile.setReadable(true, false);
             outFile.setExecutable(true, false);
-            Log.i(TAG, "Extracted .so to: " + outFile.getAbsolutePath());
+            Log.i(TAG, "Extracted to: " + outFile.getAbsolutePath());
             return outFile.getAbsolutePath();
+
         } catch (Throwable t) {
-            Log.e(TAG, "Extract failed: " + t.getMessage());
+            Log.e(TAG, "Auto-extract failed: " + t.getMessage(), t);
             return null;
         }
     }
