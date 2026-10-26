@@ -7,6 +7,10 @@
 #include <cstdint>
 #include <unistd.h>
 #include <pthread.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include "shadowhook.h"
 
 #define TAG "NativeCryptoHook"
@@ -43,7 +47,7 @@ static void dump_hex(const char* label, const void* ptr, size_t len, size_t max_
 }
 
 // ============================================================
-//  AES Decryptor Hooks (من CRI AES)
+//  AES Decryptor Hooks
 // ============================================================
 typedef void* (*CreateFunc)(const void*, size_t, const void*, size_t);
 static CreateFunc original_create = nullptr;
@@ -82,75 +86,90 @@ static size_t hooked_decrypt(void* this_ptr, const void* in, size_t in_len, void
 }
 
 // ============================================================
-//  criNetStm Hooks (شبكة CRIWARE)
+//  Socket Hooks (send/recv/connect)
 // ============================================================
+typedef ssize_t (*SendFunc)(int, const void*, size_t, int);
+typedef ssize_t (*RecvFunc)(int, void*, size_t, int);
+typedef ssize_t (*SendtoFunc)(int, const void*, size_t, int, const struct sockaddr*, socklen_t);
+typedef ssize_t (*RecvfromFunc)(int, void*, size_t, int, struct sockaddr*, socklen_t*);
+typedef int (*ConnectFunc)(int, const struct sockaddr*, socklen_t);
 
-// criNetStmCustom_ThreadFuncHttp @ 0x8bf4434
-typedef void* (*NetStmThreadFunc)(void*);
-static NetStmThreadFunc original_netstm_thread = nullptr;
+static SendFunc original_send = nullptr;
+static RecvFunc original_recv = nullptr;
+static SendtoFunc original_sendto = nullptr;
+static RecvfromFunc original_recvfrom = nullptr;
+static ConnectFunc original_connect = nullptr;
 
-static void* hooked_netstm_thread(void* arg) {
-    LOGI("==================================================");
-    LOGI("[NET] criNetStmCustom_ThreadFuncHttp CALLED, arg=%p", arg);
-    void* result = original_netstm_thread ? original_netstm_thread(arg) : nullptr;
-    LOGI("[NET] ThreadFuncHttp RETURNED %p", result);
-    LOGI("==================================================");
+static int send_count = 0;
+static int recv_count = 0;
+
+static ssize_t hooked_send(int sockfd, const void* buf, size_t len, int flags) {
+    send_count++;
+    // اطبع فقط البيانات الكبيرة (>= 64 بايت) وأول 30 استدعاء
+    if (send_count <= 30 && buf && len >= 64 && len <= 65536) {
+        LOGI("==================================================");
+        LOGI("[SEND] fd=%d, len=%zu, flags=%d", sockfd, len, flags);
+        dump_hex("  DATA", buf, len, 256);
+        LOGI("==================================================");
+    }
+    return original_send ? original_send(sockfd, buf, len, flags) : -1;
+}
+
+static ssize_t hooked_recv(int sockfd, void* buf, size_t len, int flags) {
+    ssize_t result = original_recv ? original_recv(sockfd, buf, len, flags) : -1;
+    recv_count++;
+    if (recv_count <= 30 && result >= 64 && result <= 65536) {
+        LOGI("==================================================");
+        LOGI("[RECV] fd=%d, len=%zd, flags=%d", sockfd, result, flags);
+        dump_hex("  DATA", buf, result, 256);
+        LOGI("==================================================");
+    }
     return result;
 }
 
-// criNetStmCommon_UnlockBuffer @ 0x8bf3620
-typedef void* (*UnlockBufferFunc)(void*);
-static UnlockBufferFunc original_unlock_buffer = nullptr;
-
-static void* hooked_unlock_buffer(void* arg) {
-    LOGI("--------------------------------------------------");
-    LOGI("[NET] criNetStmCommon_UnlockBuffer CALLED, arg=%p", arg);
-    LOGI("--------------------------------------------------");
-    return original_unlock_buffer ? original_unlock_buffer(arg) : nullptr;
+static ssize_t hooked_sendto(int sockfd, const void* buf, size_t len, int flags,
+                              const struct sockaddr* dest_addr, socklen_t addrlen) {
+    send_count++;
+    if (send_count <= 30 && buf && len >= 64 && len <= 65536) {
+        LOGI("==================================================");
+        LOGI("[SENDTO] fd=%d, len=%zu, flags=%d", sockfd, len, flags);
+        dump_hex("  DATA", buf, len, 256);
+        LOGI("==================================================");
+    }
+    return original_sendto ? original_sendto(sockfd, buf, len, flags, dest_addr, addrlen) : -1;
 }
 
-// criNetStm_SetRequestHeader @ 0x8bf35a0
-typedef void (*SetRequestHeaderFunc)(void*, const char*, const char*);
-static SetRequestHeaderFunc original_set_request_header = nullptr;
-
-static void hooked_set_request_header(void* handle, const char* name, const char* value) {
-    LOGI("--------------------------------------------------");
-    LOGI("[NET] criNetStm_SetRequestHeader");
-    LOGI("  name=%s", name ? name : "(null)");
-    LOGI("  value=%s", value ? value : "(null)");
-    LOGI("--------------------------------------------------");
-    if (original_set_request_header) original_set_request_header(handle, name, value);
+static ssize_t hooked_recvfrom(int sockfd, void* buf, size_t len, int flags,
+                                struct sockaddr* src_addr, socklen_t* addrlen) {
+    ssize_t result = original_recvfrom ? original_recvfrom(sockfd, buf, len, flags, src_addr, addrlen) : -1;
+    recv_count++;
+    if (recv_count <= 30 && result >= 64 && result <= 65536) {
+        LOGI("==================================================");
+        LOGI("[RECVFROM] fd=%d, len=%zd, flags=%d", sockfd, result, flags);
+        dump_hex("  DATA", buf, result, 256);
+        LOGI("==================================================");
+    }
+    return result;
 }
 
-// criNetStm_SetConcatMode @ 0x8bf3d6c
-typedef void (*SetConcatModeFunc)(void*, int);
-static SetConcatModeFunc original_set_concat_mode = nullptr;
-
-static void hooked_set_concat_mode(void* handle, int mode) {
-    LOGI("[NET] criNetStm_SetConcatMode mode=%d", mode);
-    if (original_set_concat_mode) original_set_concat_mode(handle, mode);
-}
-
-// criNetStm_SetMaxTransferRate @ 0x8bf3d9c
-typedef void (*SetMaxRateFunc)(void*, int);
-static SetMaxRateFunc original_set_max_rate = nullptr;
-
-static void hooked_set_max_rate(void* handle, int rate) {
-    LOGI("[NET] criNetStm_SetMaxTransferRate rate=%d", rate);
-    if (original_set_max_rate) original_set_max_rate(handle, rate);
-}
-
-// criNetStm_SetTimeoutMsec @ 0x8bf3d88
-typedef void (*SetTimeoutFunc)(void*, int);
-static SetTimeoutFunc original_set_timeout = nullptr;
-
-static void hooked_set_timeout(void* handle, int timeout) {
-    LOGI("[NET] criNetStm_SetTimeoutMsec timeout=%d", timeout);
-    if (original_set_timeout) original_set_timeout(handle, timeout);
+static int hooked_connect(int sockfd, const struct sockaddr* addr, socklen_t addrlen) {
+    LOGI("[CONNECT] fd=%d, addrlen=%u", sockfd, addrlen);
+    if (addr && addr->sa_family == AF_INET) {
+        const struct sockaddr_in* sin = (const struct sockaddr_in*)addr;
+        char ip[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &sin->sin_addr, ip, sizeof(ip));
+        LOGI("  -> IPv4: %s:%d", ip, ntohs(sin->sin_port));
+    } else if (addr && addr->sa_family == AF_INET6) {
+        const struct sockaddr_in6* sin6 = (const struct sockaddr_in6*)addr;
+        char ip[INET6_ADDRSTRLEN];
+        inet_ntop(AF_INET6, &sin6->sin6_addr, ip, sizeof(ip));
+        LOGI("  -> IPv6: [%s]:%d", ip, ntohs(sin6->sin6_port));
+    }
+    return original_connect ? original_connect(sockfd, addr, addrlen) : -1;
 }
 
 // ============================================================
-//  Thread: انتظار libUE4.so ثم تثبيت Hooks
+//  Thread: تثبيت Hooks
 // ============================================================
 static void* install_hooks_thread(void* arg) {
     LOGI("Waiting for libUE4.so...");
@@ -184,37 +203,51 @@ static void* install_hooks_thread(void* arg) {
     void* create_addr = (void*)(base + 0x8c06138);
     LOGI("Hooking criAesDecryptor_Create @ %p", create_addr);
     shadowhook_hook_func_addr(create_addr, (void*)hooked_create, (void**)&original_create);
-    LOGI("  -> original_create=%p", (void*)original_create);
 
     void* decrypt_addr = (void*)(base + 0x8c06a5c);
     LOGI("Hooking criAesDecryptor_Decrypt @ %p", decrypt_addr);
     shadowhook_hook_func_addr(decrypt_addr, (void*)hooked_decrypt, (void**)&original_decrypt);
-    LOGI("  -> original_decrypt=%p", (void*)original_decrypt);
 
-    // ====== NetStm Hooks ======
-    void* thread_func_addr = (void*)(base + 0x8bf4434);
-    LOGI("Hooking criNetStmCustom_ThreadFuncHttp @ %p", thread_func_addr);
-    shadowhook_hook_func_addr(thread_func_addr, (void*)hooked_netstm_thread, (void**)&original_netstm_thread);
+    // ====== Socket Hooks (من libc) ======
+    void* send_addr = (void*)dlsym(RTLD_DEFAULT, "send");
+    if (send_addr) {
+        LOGI("Hooking send @ %p", send_addr);
+        shadowhook_hook_func_addr(send_addr, (void*)hooked_send, (void**)&original_send);
+    } else {
+        LOGE("send not found");
+    }
 
-    void* unlock_buf_addr = (void*)(base + 0x8bf3620);
-    LOGI("Hooking criNetStmCommon_UnlockBuffer @ %p", unlock_buf_addr);
-    shadowhook_hook_func_addr(unlock_buf_addr, (void*)hooked_unlock_buffer, (void**)&original_unlock_buffer);
+    void* recv_addr = (void*)dlsym(RTLD_DEFAULT, "recv");
+    if (recv_addr) {
+        LOGI("Hooking recv @ %p", recv_addr);
+        shadowhook_hook_func_addr(recv_addr, (void*)hooked_recv, (void**)&original_recv);
+    } else {
+        LOGE("recv not found");
+    }
 
-    void* set_hdr_addr = (void*)(base + 0x8bf35a0);
-    LOGI("Hooking criNetStm_SetRequestHeader @ %p", set_hdr_addr);
-    shadowhook_hook_func_addr(set_hdr_addr, (void*)hooked_set_request_header, (void**)&original_set_request_header);
+    void* sendto_addr = (void*)dlsym(RTLD_DEFAULT, "sendto");
+    if (sendto_addr) {
+        LOGI("Hooking sendto @ %p", sendto_addr);
+        shadowhook_hook_func_addr(sendto_addr, (void*)hooked_sendto, (void**)&original_sendto);
+    } else {
+        LOGE("sendto not found");
+    }
 
-    void* set_concat_addr = (void*)(base + 0x8bf3d6c);
-    LOGI("Hooking criNetStm_SetConcatMode @ %p", set_concat_addr);
-    shadowhook_hook_func_addr(set_concat_addr, (void*)hooked_set_concat_mode, (void**)&original_set_concat_mode);
+    void* recvfrom_addr = (void*)dlsym(RTLD_DEFAULT, "recvfrom");
+    if (recvfrom_addr) {
+        LOGI("Hooking recvfrom @ %p", recvfrom_addr);
+        shadowhook_hook_func_addr(recvfrom_addr, (void*)hooked_recvfrom, (void**)&original_recvfrom);
+    } else {
+        LOGE("recvfrom not found");
+    }
 
-    void* set_rate_addr = (void*)(base + 0x8bf3d9c);
-    LOGI("Hooking criNetStm_SetMaxTransferRate @ %p", set_rate_addr);
-    shadowhook_hook_func_addr(set_rate_addr, (void*)hooked_set_max_rate, (void**)&original_set_max_rate);
-
-    void* set_timeout_addr = (void*)(base + 0x8bf3d88);
-    LOGI("Hooking criNetStm_SetTimeoutMsec @ %p", set_timeout_addr);
-    shadowhook_hook_func_addr(set_timeout_addr, (void*)hooked_set_timeout, (void**)&original_set_timeout);
+    void* connect_addr = (void*)dlsym(RTLD_DEFAULT, "connect");
+    if (connect_addr) {
+        LOGI("Hooking connect @ %p", connect_addr);
+        shadowhook_hook_func_addr(connect_addr, (void*)hooked_connect, (void**)&original_connect);
+    } else {
+        LOGE("connect not found");
+    }
 
     LOGI("##################################################");
     LOGI("All hooks installed. Waiting for calls...");
