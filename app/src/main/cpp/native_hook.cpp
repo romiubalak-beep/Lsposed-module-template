@@ -7,21 +7,11 @@
 #include <cstdint>
 #include <unistd.h>
 #include <pthread.h>
+#include "shadowhook.h"
 
 #define TAG "NativeCryptoHook"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
-
-// ============================================================
-//  NativeAPIEntries - يوفرها Vector تلقائياً
-// ============================================================
-struct NativeAPIEntries {
-    uint32_t version;
-    void* (*hook_func)(void* func, void* replace, void** backup);
-    int (*unhook_func)(void* func);
-};
-
-static NativeAPIEntries* g_api = nullptr;
 
 // ============================================================
 //  البحث عن Base Address
@@ -62,19 +52,10 @@ static void* hooked_create(const void* key, size_t key_len, const void* iv, size
     LOGI("==================================================");
     LOGI("[!!!] criAesDecryptor_Create CALLED!");
     LOGI("  key=%p (len=%zu), iv=%p (len=%zu)", key, key_len, iv, iv_len);
-
-    if (key && key_len > 0 && key_len <= 64) {
-        dump_hex("KEY", key, key_len, 32);
-    }
-    if (iv && iv_len > 0 && iv_len <= 64) {
-        dump_hex("IV", iv, iv_len, 16);
-    }
-
-    void* result = nullptr;
-    if (original_create) {
-        result = original_create(key, key_len, iv, iv_len);
-        LOGI("  -> instance=%p", result);
-    }
+    if (key && key_len > 0 && key_len <= 64) dump_hex("KEY", key, key_len, 32);
+    if (iv && iv_len > 0 && iv_len <= 64) dump_hex("IV", iv, iv_len, 16);
+    void* result = original_create ? original_create(key, key_len, iv, iv_len) : nullptr;
+    LOGI("  -> instance=%p", result);
     LOGI("==================================================");
     return result;
 }
@@ -90,30 +71,21 @@ static size_t hooked_decrypt(void* this_ptr, const void* in, size_t in_len, void
     decrypt_count++;
     if (decrypt_count <= 10) {
         LOGI("--------------------------------------------------");
-        LOGI("[%d] criAesDecryptor_Decrypt CALLED", decrypt_count);
+        LOGI("[%d] criAesDecryptor_Decrypt", decrypt_count);
         LOGI("  this=%p, in=%p (len=%zu), out=%p (len=%zu)", this_ptr, in, in_len, out, out_len);
-        if (in && in_len > 0 && in_len <= 8192) {
-            dump_hex("  ENCRYPTED", in, in_len, 64);
-        }
+        if (in && in_len > 0 && in_len <= 8192) dump_hex("  ENCRYPTED", in, in_len, 64);
     }
-
-    size_t result = 0;
-    if (original_decrypt) {
-        result = original_decrypt(this_ptr, in, in_len, out, out_len);
-    }
-
+    size_t result = original_decrypt ? original_decrypt(this_ptr, in, in_len, out, out_len) : 0;
     if (decrypt_count <= 10) {
         LOGI("  -> returned %zu", result);
-        if (out && result > 0 && result <= 8192) {
-            dump_hex("  DECRYPTED", out, result, 64);
-        }
+        if (out && result > 0 && result <= 8192) dump_hex("  DECRYPTED", out, result, 64);
         LOGI("--------------------------------------------------");
     }
     return result;
 }
 
 // ============================================================
-//  Thread: انتظار libUE4.so ثم تثبيت Hooks
+//  Thread
 // ============================================================
 static void* install_hooks_thread(void* arg) {
     LOGI("Waiting for libUE4.so...");
@@ -140,57 +112,38 @@ static void* install_hooks_thread(void* arg) {
         return nullptr;
     }
 
-    if (!g_api || !g_api->hook_func) {
-        LOGE("NativeAPIEntries invalid, cannot install hooks");
-        return nullptr;
-    }
+    // تهيئة ShadowHook (وضع UNIQUE)
+    int init_r = shadowhook_init(SHADOWHOOK_MODE_UNIQUE, false);
+    LOGI("shadowhook_init returned %d", init_r);
 
     // Hook Create @ 0x8c06138
     void* create_addr = (void*)(base + 0x8c06138);
-    LOGI("Hooking Create @ %p (via Vector hook_func)", create_addr);
-    void* r1 = g_api->hook_func(create_addr, (void*)hooked_create, (void**)&original_create);
-    LOGI("hook_func(Create) returned %p, original=%p", r1, (void*)original_create);
+    LOGI("Hooking Create @ %p", create_addr);
+    void* orig1 = shadowhook_hook_func_addr(create_addr, (void*)hooked_create, (void**)&original_create);
+    LOGI("shadowhook_hook(Create) returned %p, original=%p", orig1, (void*)original_create);
 
     // Hook Decrypt @ 0x8c06a5c
     void* decrypt_addr = (void*)(base + 0x8c06a5c);
-    LOGI("Hooking Decrypt @ %p (via Vector hook_func)", decrypt_addr);
-    void* r2 = g_api->hook_func(decrypt_addr, (void*)hooked_decrypt, (void**)&original_decrypt);
-    LOGI("hook_func(Decrypt) returned %p, original=%p", r2, (void*)original_decrypt);
+    LOGI("Hooking Decrypt @ %p", decrypt_addr);
+    void* orig2 = shadowhook_hook_func_addr(decrypt_addr, (void*)hooked_decrypt, (void**)&original_decrypt);
+    LOGI("shadowhook_hook(Decrypt) returned %p, original=%p", orig2, (void*)original_decrypt);
 
-    LOGI("All hooks installed via Vector hook_func.");
+    LOGI("All hooks installed via ShadowHook.");
     return nullptr;
 }
+
 // ============================================================
-//  native_init - نقطة الدخول الرسمية (يستدعيها Vector)
+//  JNI_OnLoad
 // ============================================================
-extern "C" [[gnu::visibility("default")]] [[gnu::used]]
-void* native_init(NativeAPIEntries* entries) {
-    LOGI("native_init called. api_version=%u, entries=%p",
-         entries ? entries->version : 0, (void*)entries);
-
-    g_api = entries;
-
-    if (!g_api || !g_api->hook_func) {
-        LOGE("NativeAPIEntries is invalid or hook_func is null");
-        return nullptr;
-    }
-
+extern "C" __attribute__((visibility("default")))
+JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
+    LOGI("JNI_OnLoad called");
     pthread_t tid;
-    int ret = pthread_create(&tid, nullptr, install_hooks_thread, nullptr);
-    if (ret == 0) {
+    if (pthread_create(&tid, nullptr, install_hooks_thread, nullptr) == 0) {
         pthread_detach(tid);
         LOGI("Background hook installer thread started");
     } else {
-        LOGE("pthread_create failed: %d", ret);
+        LOGE("pthread_create failed");
     }
-
-    return nullptr;
-}
-
-// ============================================================
-//  JNI_OnLoad - للتسجيل فقط
-// ============================================================
-extern "C" [[gnu::visibility("default")]] JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void* reserved) {
-    LOGI("JNI_OnLoad called");
     return JNI_VERSION_1_6;
 }
