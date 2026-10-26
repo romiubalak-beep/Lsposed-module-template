@@ -53,7 +53,6 @@ static void dump_hex(const char* label, const void* ptr, size_t len, size_t max_
 // ============================================================
 //  Create Hook
 //  الإزاحة: 0x8c06138
-//  التوقيع المفترض: void* Create(const void* key, size_t key_len, const void* iv, size_t iv_len)
 // ============================================================
 typedef void* (*CreateFunc)(const void*, size_t, const void*, size_t);
 static CreateFunc original_create = nullptr;
@@ -83,7 +82,6 @@ static void* hooked_create(const void* key, size_t key_len, const void* iv, size
 // ============================================================
 //  Decrypt Hook
 //  الإزاحة: 0x8c06a5c
-//  التوقيع المفترض: size_t Decrypt(void* this_ptr, const void* in, size_t in_len, void* out, size_t out_len)
 // ============================================================
 typedef size_t (*DecryptFunc)(void*, const void*, size_t, void*, size_t);
 static DecryptFunc original_decrypt = nullptr;
@@ -143,18 +141,14 @@ static void* install_hooks_thread(void* arg) {
     // انتظر 500ms إضافية لضمان اكتمال التحميل
     usleep(500 * 1000);
 
-    // تحقق من أن base لا يزال صالحاً
     uintptr_t base2 = get_module_base("libUE4.so");
     if (base2 != 0) base = base2;
     LOGI("Using base: %p", (void*)base);
 
-    // حماية: base يجب أن يكون page-aligned
     if ((base & 0xFFF) != 0) {
         LOGE("base is not page-aligned: %p. Aborting.", (void*)base);
         return nullptr;
     }
-
-    // حماية: base يجب أن يكون أكبر من 0x1000
     if (base < 0x1000) {
         LOGE("base is too small: %p. Aborting.", (void*)base);
         return nullptr;
@@ -163,7 +157,6 @@ static void* install_hooks_thread(void* arg) {
     // ====== Hook criAesDecryptor_Create @ 0x8c06138 ======
     void* create_addr = (void*)(base + 0x8c06138);
     LOGI("Hooking criAesDecryptor_Create @ %p", create_addr);
-
     if ((uintptr_t)create_addr < 0x1000) {
         LOGE("create_addr is invalid: %p", create_addr);
     } else {
@@ -178,7 +171,6 @@ static void* install_hooks_thread(void* arg) {
     // ====== Hook criAesDecryptor_Decrypt @ 0x8c06a5c ======
     void* decrypt_addr = (void*)(base + 0x8c06a5c);
     LOGI("Hooking criAesDecryptor_Decrypt @ %p", decrypt_addr);
-
     if ((uintptr_t)decrypt_addr < 0x1000) {
         LOGE("decrypt_addr is invalid: %p", decrypt_addr);
     } else {
@@ -197,11 +189,10 @@ static void* install_hooks_thread(void* arg) {
 }
 
 // ============================================================
-//  native_init — فقط يشغل الـ thread ويعود فوراً
+//  native_init
 // ============================================================
 extern "C" [[gnu::visibility("default")]] void native_init() {
     LOGI("native_init called. Starting background hook installer...");
-
     pthread_t tid;
     int ret = pthread_create(&tid, nullptr, install_hooks_thread, nullptr);
     if (ret == 0) {
@@ -213,11 +204,10 @@ extern "C" [[gnu::visibility("default")]] void native_init() {
 }
 
 // ============================================================
-//  JNI_OnLoad — يستدعي native_init تلقائياً
+//  JNI_OnLoad
 // ============================================================
 extern "C" [[gnu::visibility("default")]] JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void* reserved) {
     LOGI("JNI_OnLoad called (library loaded)");
-    // استدعِ native_init مباشرة (لن يسبب انهيار لأنها تُشغّل thread فقط)
     native_init();
     return JNI_VERSION_1_6;
 }
