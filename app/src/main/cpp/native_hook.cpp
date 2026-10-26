@@ -14,7 +14,7 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
 // ============================================================
-//  البحث عن Base Address
+//  البحث عن Base Address لأي مكتبة محمّلة
 // ============================================================
 struct FindModuleCtx { const char* name; uintptr_t base; };
 
@@ -52,6 +52,8 @@ static void dump_hex(const char* label, const void* ptr, size_t len, size_t max_
 
 // ============================================================
 //  Create Hook
+//  الإزاحة: 0x8c06138
+//  التوقيع المفترض: void* Create(const void* key, size_t key_len, const void* iv, size_t iv_len)
 // ============================================================
 typedef void* (*CreateFunc)(const void*, size_t, const void*, size_t);
 static CreateFunc original_create = nullptr;
@@ -80,6 +82,8 @@ static void* hooked_create(const void* key, size_t key_len, const void* iv, size
 
 // ============================================================
 //  Decrypt Hook
+//  الإزاحة: 0x8c06a5c
+//  التوقيع المفترض: size_t Decrypt(void* this_ptr, const void* in, size_t in_len, void* out, size_t out_len)
 // ============================================================
 typedef size_t (*DecryptFunc)(void*, const void*, size_t, void*, size_t);
 static DecryptFunc original_decrypt = nullptr;
@@ -116,57 +120,74 @@ static size_t hooked_decrypt(void* this_ptr, const void* in, size_t in_len, void
 }
 
 // ============================================================
-//  مؤشر ترابط الانتظار
+//  Thread للانتظار وتثبيت الـ Hooks
 // ============================================================
 static void* install_hooks_thread(void* arg) {
-    LOGI("Waiting for libUE4.so to be loaded...");
+    LOGI("Thread started. Waiting for libUE4.so...");
 
-    // انتظر حتى تُحمَّل libUE4.so (بحد أقصى 60 ثانية)
     uintptr_t base = 0;
-    for (int i = 0; i < 600; i++) {
+    for (int i = 0; i < 900; i++) {  // 90 ثانية
         base = get_module_base("libUE4.so");
         if (base != 0) {
             LOGI("libUE4.so detected after %d00ms at base %p", i, (void*)base);
             break;
         }
-        usleep(100 * 1000); // 100ms
+        usleep(100 * 1000);
     }
 
     if (base == 0) {
-        LOGE("Timeout waiting for libUE4.so. Aborting hook install.");
+        LOGE("Timeout waiting for libUE4.so. Aborting.");
         return nullptr;
     }
 
-    // انتظر قليلاً لضمان اكتمال التحميل
-    usleep(500 * 1000); // 500ms
+    // انتظر 500ms إضافية لضمان اكتمال التحميل
+    usleep(500 * 1000);
 
-    // أعد التحقق من base (قد تتغير)
-    base = get_module_base("libUE4.so");
-    if (base == 0) {
-        LOGE("libUE4.so base became 0. Aborting.");
+    // تحقق من أن base لا يزال صالحاً
+    uintptr_t base2 = get_module_base("libUE4.so");
+    if (base2 != 0) base = base2;
+    LOGI("Using base: %p", (void*)base);
+
+    // حماية: base يجب أن يكون page-aligned
+    if ((base & 0xFFF) != 0) {
+        LOGE("base is not page-aligned: %p. Aborting.", (void*)base);
         return nullptr;
     }
 
-    LOGI("Installing hooks at base %p", (void*)base);
+    // حماية: base يجب أن يكون أكبر من 0x1000
+    if (base < 0x1000) {
+        LOGE("base is too small: %p. Aborting.", (void*)base);
+        return nullptr;
+    }
 
-    // Create @ 0x8c06138
+    // ====== Hook criAesDecryptor_Create @ 0x8c06138 ======
     void* create_addr = (void*)(base + 0x8c06138);
     LOGI("Hooking criAesDecryptor_Create @ %p", create_addr);
-    int r1 = DobbyHook(create_addr, (void*)hooked_create, (void**)&original_create);
-    if (r1 == 0) {
-        LOGI("Hook Create SUCCESS. original=%p", (void*)original_create);
+
+    if ((uintptr_t)create_addr < 0x1000) {
+        LOGE("create_addr is invalid: %p", create_addr);
     } else {
-        LOGE("Hook Create FAILED: %d", r1);
+        int r1 = DobbyHook(create_addr, (void*)hooked_create, (void**)&original_create);
+        if (r1 == 0) {
+            LOGI("Hook Create SUCCESS. original=%p", (void*)original_create);
+        } else {
+            LOGE("Hook Create FAILED: %d", r1);
+        }
     }
 
-    // Decrypt @ 0x8c06a5c
+    // ====== Hook criAesDecryptor_Decrypt @ 0x8c06a5c ======
     void* decrypt_addr = (void*)(base + 0x8c06a5c);
     LOGI("Hooking criAesDecryptor_Decrypt @ %p", decrypt_addr);
-    int r2 = DobbyHook(decrypt_addr, (void*)hooked_decrypt, (void**)&original_decrypt);
-    if (r2 == 0) {
-        LOGI("Hook Decrypt SUCCESS. original=%p", (void*)original_decrypt);
+
+    if ((uintptr_t)decrypt_addr < 0x1000) {
+        LOGE("decrypt_addr is invalid: %p", decrypt_addr);
     } else {
-        LOGE("Hook Decrypt FAILED: %d", r2);
+        int r2 = DobbyHook(decrypt_addr, (void*)hooked_decrypt, (void**)&original_decrypt);
+        if (r2 == 0) {
+            LOGI("Hook Decrypt SUCCESS. original=%p", (void*)original_decrypt);
+        } else {
+            LOGE("Hook Decrypt FAILED: %d", r2);
+        }
     }
 
     LOGI("##################################################");
@@ -182,16 +203,21 @@ extern "C" [[gnu::visibility("default")]] void native_init() {
     LOGI("native_init called. Starting background hook installer...");
 
     pthread_t tid;
-    pthread_create(&tid, nullptr, install_hooks_thread, nullptr);
-    pthread_detach(tid);
-
-    LOGI("Background thread started. Returning from native_init.");
+    int ret = pthread_create(&tid, nullptr, install_hooks_thread, nullptr);
+    if (ret == 0) {
+        pthread_detach(tid);
+        LOGI("Background thread started successfully");
+    } else {
+        LOGE("pthread_create failed: %d", ret);
+    }
 }
 
 // ============================================================
-//  JNI_OnLoad — لا يستدعي native_init، فقط يسجل
+//  JNI_OnLoad — يستدعي native_init تلقائياً
 // ============================================================
 extern "C" [[gnu::visibility("default")]] JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void* reserved) {
-    LOGI("JNI_OnLoad called (library loaded into target process)");
+    LOGI("JNI_OnLoad called (library loaded)");
+    // استدعِ native_init مباشرة (لن يسبب انهيار لأنها تُشغّل thread فقط)
+    native_init();
     return JNI_VERSION_1_6;
 }
