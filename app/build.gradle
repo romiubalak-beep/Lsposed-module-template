@@ -16,7 +16,6 @@ android {
         ndk {
             abiFilters 'arm64-v8a'
         }
-
         externalNativeBuild {
             cmake {
                 cppFlags ""
@@ -24,9 +23,13 @@ android {
         }
     }
 
+    buildFeatures {
+        prefab true
+    }
+
     buildTypes {
         release {
-            minifyEnabled false
+            minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
@@ -36,17 +39,16 @@ android {
         targetCompatibility JavaVersion.VERSION_17
     }
 
-    lint {
-        checkReleaseBuilds false
-    }
-
-    dependenciesInfo.includeInApk false
-
     externalNativeBuild {
         cmake {
             path file('src/main/cpp/CMakeLists.txt')
             version '3.22.1'
         }
+    }
+
+    packagingOptions {
+        pickFirst '**/libshadowhook.so'
+        pickFirst '**/libshadowhook_nothing.so'
     }
 }
 
@@ -54,4 +56,6 @@ dependencies {
     compileOnly 'androidx.annotation:annotation:1.9.1'
     compileOnly 'io.github.libxposed:api:101.0.1'
     compileOnly project(":libxposed-compat")
+
+    implementation 'com.bytedance.android:shadowhook:2.0.1'
 }
