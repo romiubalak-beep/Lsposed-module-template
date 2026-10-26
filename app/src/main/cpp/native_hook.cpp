@@ -13,9 +13,6 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
-// ============================================================
-//  البحث عن Base Address
-// ============================================================
 struct FindModuleCtx { const char* name; uintptr_t base; };
 
 static int find_module_cb(struct dl_phdr_info* info, size_t size, void* data) {
@@ -33,9 +30,6 @@ static uintptr_t get_module_base(const char* name) {
     return ctx.base;
 }
 
-// ============================================================
-//  dump hex
-// ============================================================
 static void dump_hex(const char* label, const void* ptr, size_t len, size_t max_len) {
     if (!ptr || len == 0) {
         LOGI("%s: (null or empty)", label);
@@ -50,9 +44,6 @@ static void dump_hex(const char* label, const void* ptr, size_t len, size_t max_
     LOGI("%s [%zu bytes] (shown %zu): %s", label, len, n, hex);
 }
 
-// ============================================================
-//  Create Hook
-// ============================================================
 typedef void* (*CreateFunc)(const void*, size_t, const void*, size_t);
 static CreateFunc original_create = nullptr;
 
@@ -78,9 +69,6 @@ static void* hooked_create(const void* key, size_t key_len, const void* iv, size
     return result;
 }
 
-// ============================================================
-//  Decrypt Hook
-// ============================================================
 typedef size_t (*DecryptFunc)(void*, const void*, size_t, void*, size_t);
 static DecryptFunc original_decrypt = nullptr;
 static int decrypt_call_count = 0;
@@ -115,21 +103,17 @@ static size_t hooked_decrypt(void* this_ptr, const void* in, size_t in_len, void
     return result;
 }
 
-// ============================================================
-//  مؤشر ترابط الانتظار
-// ============================================================
 static void* install_hooks_thread(void* arg) {
     LOGI("Waiting for libUE4.so to be loaded...");
 
-    // انتظر حتى تُحمَّل libUE4.so (بحد أقصى 60 ثانية)
     uintptr_t base = 0;
     for (int i = 0; i < 600; i++) {
         base = get_module_base("libUE4.so");
         if (base != 0) {
-            LOGI("libUE4.so detected after %d00ms at base %p", i, (void*)base);
+            LOGI("libUE4.so detected after %dms at base %p", i * 100, (void*)base);
             break;
         }
-        usleep(100 * 1000); // 100ms
+        usleep(100 * 1000);
     }
 
     if (base == 0) {
@@ -137,10 +121,8 @@ static void* install_hooks_thread(void* arg) {
         return nullptr;
     }
 
-    // انتظر قليلاً لضمان اكتمال التحميل
-    usleep(500 * 1000); // 500ms
+    usleep(500 * 1000);
 
-    // أعد التحقق من base (قد تتغير)
     base = get_module_base("libUE4.so");
     if (base == 0) {
         LOGE("libUE4.so base became 0. Aborting.");
@@ -149,7 +131,6 @@ static void* install_hooks_thread(void* arg) {
 
     LOGI("Installing hooks at base %p", (void*)base);
 
-    // Create @ 0x8c06138
     void* create_addr = (void*)(base + 0x8c06138);
     LOGI("Hooking criAesDecryptor_Create @ %p", create_addr);
     int r1 = DobbyHook(create_addr, (void*)hooked_create, (void**)&original_create);
@@ -159,7 +140,6 @@ static void* install_hooks_thread(void* arg) {
         LOGE("Hook Create FAILED: %d", r1);
     }
 
-    // Decrypt @ 0x8c06a5c
     void* decrypt_addr = (void*)(base + 0x8c06a5c);
     LOGI("Hooking criAesDecryptor_Decrypt @ %p", decrypt_addr);
     int r2 = DobbyHook(decrypt_addr, (void*)hooked_decrypt, (void**)&original_decrypt);
@@ -176,7 +156,7 @@ static void* install_hooks_thread(void* arg) {
 }
 
 // ============================================================
-//  native_init — فقط يشغل الـ thread ويعود فوراً
+//  native_init
 // ============================================================
 extern "C" [[gnu::visibility("default")]] void native_init() {
     LOGI("native_init called. Starting background hook installer...");
@@ -189,7 +169,17 @@ extern "C" [[gnu::visibility("default")]] void native_init() {
 }
 
 // ============================================================
-//  JNI_OnLoad — لا يستدعي native_init، فقط يسجل
+//  JNI: Java_com_yourname_efootballhook_MainModule_nativeInit
+// ============================================================
+extern "C" [[gnu::visibility("default")]]
+JNIEXPORT void JNICALL
+Java_com_yourname_efootballhook_MainModule_nativeInit(JNIEnv* env, jclass clazz) {
+    LOGI("Java called nativeInit -> invoking native_init");
+    native_init();
+}
+
+// ============================================================
+//  JNI_OnLoad
 // ============================================================
 extern "C" [[gnu::visibility("default")]] JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void* reserved) {
     LOGI("JNI_OnLoad called (library loaded into target process)");
