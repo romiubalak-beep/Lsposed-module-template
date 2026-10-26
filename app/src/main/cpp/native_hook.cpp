@@ -7,17 +7,26 @@
 #include <cstdint>
 #include <unistd.h>
 #include <pthread.h>
-#include "dobby.h"
 
 #define TAG "NativeCryptoHook"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
 // ============================================================
-//  البحث عن Base Address لأي مكتبة محمّلة
+//  NativeAPIEntries - يوفرها Vector
+// ============================================================
+struct NativeAPIEntries {
+    uint32_t version;
+    void* (*hook_func)(void* func, void* replace, void** backup);
+    int (*unhook_func)(void* func);
+};
+
+static NativeAPIEntries* g_api = nullptr;
+
+// ============================================================
+//  Base Address
 // ============================================================
 struct FindModuleCtx { const char* name; uintptr_t base; };
-
 static int find_module_cb(struct dl_phdr_info* info, size_t size, void* data) {
     FindModuleCtx* ctx = (FindModuleCtx*)data;
     if (info->dlpi_name && strstr(info->dlpi_name, ctx->name)) {
@@ -26,33 +35,23 @@ static int find_module_cb(struct dl_phdr_info* info, size_t size, void* data) {
     }
     return 0;
 }
-
 static uintptr_t get_module_base(const char* name) {
     FindModuleCtx ctx = { name, 0 };
     dl_iterate_phdr(find_module_cb, &ctx);
     return ctx.base;
 }
 
-// ============================================================
-//  dump hex
-// ============================================================
 static void dump_hex(const char* label, const void* ptr, size_t len, size_t max_len) {
-    if (!ptr || len == 0) {
-        LOGI("%s: (null or empty)", label);
-        return;
-    }
+    if (!ptr || len == 0) { LOGI("%s: null", label); return; }
     size_t n = (len < max_len) ? len : max_len;
     char hex[512] = {0};
     const uint8_t* p = (const uint8_t*)ptr;
-    for (size_t i = 0; i < n; i++) {
-        sprintf(hex + (i * 2), "%02x", p[i]);
-    }
-    LOGI("%s [%zu bytes] (shown %zu): %s", label, len, n, hex);
+    for (size_t i = 0; i < n; i++) sprintf(hex + (i * 2), "%02x", p[i]);
+    LOGI("%s [%zu bytes]: %s", label, len, hex);
 }
 
 // ============================================================
-//  Create Hook
-//  الإزاحة: 0x8c06138
+//  Hooks
 // ============================================================
 typedef void* (*CreateFunc)(const void*, size_t, const void*, size_t);
 static CreateFunc original_create = nullptr;
@@ -60,154 +59,102 @@ static CreateFunc original_create = nullptr;
 static void* hooked_create(const void* key, size_t key_len, const void* iv, size_t iv_len) {
     LOGI("==================================================");
     LOGI("[!!!] criAesDecryptor_Create CALLED!");
-    LOGI("  key ptr=%p, key_len=%zu", key, key_len);
-    LOGI("  iv  ptr=%p, iv_len=%zu", iv, iv_len);
-
-    if (key && key_len > 0 && key_len <= 64) {
-        dump_hex("KEY", key, key_len, 32);
-    }
-    if (iv && iv_len > 0 && iv_len <= 64) {
-        dump_hex("IV", iv, iv_len, 16);
-    }
-
-    void* result = nullptr;
-    if (original_create) {
-        result = original_create(key, key_len, iv, iv_len);
-        LOGI("  -> created instance at %p", result);
-    }
+    LOGI("  key=%p (len=%zu), iv=%p (len=%zu)", key, key_len, iv, iv_len);
+    if (key && key_len > 0 && key_len <= 64) dump_hex("KEY", key, key_len, 32);
+    if (iv && iv_len > 0 && iv_len <= 64) dump_hex("IV", iv, iv_len, 16);
+    void* result = original_create ? original_create(key, key_len, iv, iv_len) : nullptr;
+    LOGI("  -> instance=%p", result);
     LOGI("==================================================");
     return result;
 }
 
-// ============================================================
-//  Decrypt Hook
-//  الإزاحة: 0x8c06a5c
-// ============================================================
 typedef size_t (*DecryptFunc)(void*, const void*, size_t, void*, size_t);
 static DecryptFunc original_decrypt = nullptr;
-static int decrypt_call_count = 0;
+static int decrypt_count = 0;
 
 static size_t hooked_decrypt(void* this_ptr, const void* in, size_t in_len, void* out, size_t out_len) {
-    decrypt_call_count++;
-
-    if (decrypt_call_count <= 10) {
+    decrypt_count++;
+    if (decrypt_count <= 10) {
         LOGI("--------------------------------------------------");
-        LOGI("[%d] criAesDecryptor_Decrypt CALLED", decrypt_call_count);
-        LOGI("  this=%p, in=%p (len=%zu), out=%p (len=%zu)",
-             this_ptr, in, in_len, out, out_len);
-
-        if (in && in_len > 0 && in_len <= 8192) {
-            dump_hex("  ENCRYPTED (in)", in, in_len, 64);
-        }
+        LOGI("[%d] criAesDecryptor_Decrypt", decrypt_count);
+        LOGI("  this=%p, in=%p (len=%zu), out=%p (len=%zu)", this_ptr, in, in_len, out, out_len);
+        if (in && in_len > 0 && in_len <= 8192) dump_hex("  ENCRYPTED", in, in_len, 64);
     }
-
-    size_t result = 0;
-    if (original_decrypt) {
-        result = original_decrypt(this_ptr, in, in_len, out, out_len);
-    }
-
-    if (decrypt_call_count <= 10) {
+    size_t result = original_decrypt ? original_decrypt(this_ptr, in, in_len, out, out_len) : 0;
+    if (decrypt_count <= 10) {
         LOGI("  -> returned %zu", result);
-        if (out && result > 0 && result <= 8192) {
-            dump_hex("  DECRYPTED (out)", out, result, 64);
-        }
+        if (out && result > 0 && result <= 8192) dump_hex("  DECRYPTED", out, result, 64);
         LOGI("--------------------------------------------------");
     }
-
     return result;
 }
 
 // ============================================================
-//  Thread للانتظار وتثبيت الـ Hooks
+//  Thread
 // ============================================================
 static void* install_hooks_thread(void* arg) {
-    LOGI("Thread started. Waiting for libUE4.so...");
-
+    LOGI("Waiting for libUE4.so...");
     uintptr_t base = 0;
-    for (int i = 0; i < 900; i++) {  // 90 ثانية
+    for (int i = 0; i < 900; i++) {
         base = get_module_base("libUE4.so");
-        if (base != 0) {
-            LOGI("libUE4.so detected after %d00ms at base %p", i, (void*)base);
-            break;
-        }
+        if (base != 0) { LOGI("libUE4.so detected after %d00ms at %p", i, (void*)base); break; }
         usleep(100 * 1000);
     }
-
-    if (base == 0) {
-        LOGE("Timeout waiting for libUE4.so. Aborting.");
-        return nullptr;
-    }
-
-    // انتظر 500ms إضافية لضمان اكتمال التحميل
+    if (base == 0) { LOGE("Timeout waiting for libUE4.so"); return nullptr; }
     usleep(500 * 1000);
+    base = get_module_base("libUE4.so");
+    if (base == 0 || base < 0x1000) { LOGE("Invalid base: %p", (void*)base); return nullptr; }
 
-    uintptr_t base2 = get_module_base("libUE4.so");
-    if (base2 != 0) base = base2;
-    LOGI("Using base: %p", (void*)base);
-
-    if ((base & 0xFFF) != 0) {
-        LOGE("base is not page-aligned: %p. Aborting.", (void*)base);
-        return nullptr;
-    }
-    if (base < 0x1000) {
-        LOGE("base is too small: %p. Aborting.", (void*)base);
-        return nullptr;
-    }
-
-    // ====== Hook criAesDecryptor_Create @ 0x8c06138 ======
+    // استخدم hook_func من Vector بدلاً من DobbyHook
     void* create_addr = (void*)(base + 0x8c06138);
-    LOGI("Hooking criAesDecryptor_Create @ %p", create_addr);
-    if ((uintptr_t)create_addr < 0x1000) {
-        LOGE("create_addr is invalid: %p", create_addr);
+    LOGI("Hooking Create @ %p (via Vector hook_func)", create_addr);
+    if (g_api && g_api->hook_func) {
+        int r = g_api->hook_func(create_addr, (void*)hooked_create, (void**)&original_create);
+        LOGI("hook_func(Create) returned %d, original=%p", r, (void*)original_create);
     } else {
-        int r1 = DobbyHook(create_addr, (void*)hooked_create, (void**)&original_create);
-        if (r1 == 0) {
-            LOGI("Hook Create SUCCESS. original=%p", (void*)original_create);
-        } else {
-            LOGE("Hook Create FAILED: %d", r1);
-        }
+        LOGE("hook_func is null!");
     }
 
-    // ====== Hook criAesDecryptor_Decrypt @ 0x8c06a5c ======
     void* decrypt_addr = (void*)(base + 0x8c06a5c);
-    LOGI("Hooking criAesDecryptor_Decrypt @ %p", decrypt_addr);
-    if ((uintptr_t)decrypt_addr < 0x1000) {
-        LOGE("decrypt_addr is invalid: %p", decrypt_addr);
+    LOGI("Hooking Decrypt @ %p (via Vector hook_func)", decrypt_addr);
+    if (g_api && g_api->hook_func) {
+        int r = g_api->hook_func(decrypt_addr, (void*)hooked_decrypt, (void**)&original_decrypt);
+        LOGI("hook_func(Decrypt) returned %d, original=%p", r, (void*)original_decrypt);
     } else {
-        int r2 = DobbyHook(decrypt_addr, (void*)hooked_decrypt, (void**)&original_decrypt);
-        if (r2 == 0) {
-            LOGI("Hook Decrypt SUCCESS. original=%p", (void*)original_decrypt);
-        } else {
-            LOGE("Hook Decrypt FAILED: %d", r2);
-        }
+        LOGE("hook_func is null!");
     }
 
-    LOGI("##################################################");
-    LOGI("All hooks installed. Waiting for calls...");
-    LOGI("##################################################");
+    LOGI("All hooks installed via Vector.");
     return nullptr;
 }
 
 // ============================================================
-//  native_init
+//  native_init - نقطة الدخول التي يستدعيها Vector
 // ============================================================
-extern "C" [[gnu::visibility("default")]] void native_init() {
-    LOGI("native_init called. Starting background hook installer...");
-    pthread_t tid;
-    int ret = pthread_create(&tid, nullptr, install_hooks_thread, nullptr);
-    if (ret == 0) {
-        pthread_detach(tid);
-        LOGI("Background thread started successfully");
-    } else {
-        LOGE("pthread_create failed: %d", ret);
+extern "C" [[gnu::visibility("default")]] [[gnu::used]]
+void* native_init(NativeAPIEntries* entries) {
+    LOGI("native_init called. api_version=%u", entries ? entries->version : 0);
+    g_api = entries;
+
+    if (!g_api || !g_api->hook_func) {
+        LOGE("NativeAPIEntries is invalid or hook_func is null");
+        return nullptr;
     }
+
+    pthread_t tid;
+    if (pthread_create(&tid, nullptr, install_hooks_thread, nullptr) == 0) {
+        pthread_detach(tid);
+    } else {
+        LOGE("pthread_create failed");
+    }
+
+    return nullptr; // لا نحتاج NativeOnModuleLoaded callback
 }
 
 // ============================================================
-//  JNI_OnLoad
+//  JNI_OnLoad - فقط سجل
 // ============================================================
 extern "C" [[gnu::visibility("default")]] JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void* reserved) {
-    LOGI("JNI_OnLoad called (library loaded)");
-    native_init();
+    LOGI("JNI_OnLoad called");
     return JNI_VERSION_1_6;
 }
