@@ -7,12 +7,10 @@ set_target_properties(dobby PROPERTIES IMPORTED_LOCATION
 
 add_library(native_hook SHARED native_hook.cpp)
 
-# مسار dobby.h
 target_include_directories(native_hook PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/libs)
 
-# تأكد من تصدير الرموز (JNI_OnLoad, native_init)
 target_compile_options(native_hook PRIVATE -fvisibility=default)
 
 target_link_libraries(native_hook dobby log android dl)
