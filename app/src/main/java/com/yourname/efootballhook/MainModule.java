@@ -22,20 +22,11 @@ public class MainModule extends XposedModule {
 
         Log.i(TAG, "Target package ready. Installing Java hooks...");
 
-        // 1. Hook GameActivity.generateAESKey(String)
         hookGenerateAESKey();
-
-        // 2. Hook GameActivity.getConfigRulesDecompressed(byte[])
         hookGetConfigRulesDecompressed();
-
-        // 3. ابحث عن الحقل CONFIGRULES_KEY واطبع قيمته
         inspectConfigRulesKeyField();
     }
 
-    /**
-     * Hook: private SecretKey generateAESKey(String str)
-     * يطبع str (كلمة المرور) مباشرة.
-     */
     private void hookGenerateAESKey() {
         try {
             Class<?> gameActivity = Class.forName("com.epicgames.ue4.GameActivity");
@@ -65,17 +56,14 @@ public class MainModule extends XposedModule {
                 }
             };
 
-            hook(target, hooker);
+            // ✅ التصحيح: hook(Executable).intercept(Hooker)
+            hook(target).intercept(hooker);
             Log.i(TAG, "✅ Hooked GameActivity.generateAESKey");
         } catch (Throwable t) {
             Log.e(TAG, "❌ hookGenerateAESKey failed: " + t.getMessage(), t);
         }
     }
 
-    /**
-     * Hook: private InputStream getConfigRulesDecompressed(byte[] bArr)
-     * يطبع بيانات configrules المشفرة.
-     */
     private void hookGetConfigRulesDecompressed() {
         try {
             Class<?> gameActivity = Class.forName("com.epicgames.ue4.GameActivity");
@@ -92,7 +80,6 @@ public class MainModule extends XposedModule {
                         Log.i(TAG, "[!!!] getConfigRulesDecompressed CALLED");
                         Log.i(TAG, "  data length: " + data.length);
                         if (data.length >= 10) {
-                            // اطبع أول 64 بايت
                             int n = Math.min(64, data.length);
                             StringBuilder sb = new StringBuilder();
                             for (int i = 0; i < n; i++) {
@@ -106,16 +93,14 @@ public class MainModule extends XposedModule {
                 }
             };
 
-            hook(target, hooker);
+            // ✅ التصحيح
+            hook(target).intercept(hooker);
             Log.i(TAG, "✅ Hooked GameActivity.getConfigRulesDecompressed");
         } catch (Throwable t) {
             Log.e(TAG, "❌ hookGetConfigRulesDecompressed failed: " + t.getMessage(), t);
         }
     }
 
-    /**
-     * افحص الحقل CONFIGRULES_KEY واطبع قيمته (إن كان static).
-     */
     private void inspectConfigRulesKeyField() {
         try {
             Class<?> gameActivity = Class.forName("com.epicgames.ue4.GameActivity");
@@ -128,7 +113,6 @@ public class MainModule extends XposedModule {
                     Log.i(TAG, "  type: " + f.getType().getName());
                     Log.i(TAG, "  modifiers: " + java.lang.reflect.Modifier.toString(f.getModifiers()));
 
-                    // إذا كان static، اطبع قيمته
                     if (java.lang.reflect.Modifier.isStatic(f.getModifiers())) {
                         try {
                             Object value = f.get(null);
