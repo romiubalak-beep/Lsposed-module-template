@@ -308,8 +308,8 @@ static void* install_hooks_thread(void* arg) {
     // 0x05708d14 - 0x2866500 = 0x2FA2814
     void* verify_addr = (void*)(base + 0x2FA2814);
     LOGI("Hooking SSL_get_verify_result @ %p", verify_addr);
-    int r_verify = shadowhook_hook_func_addr(verify_addr, (void*)hooked_verify_result, (void**)&original_verify_result);
-    LOGI("  → result: %d, original=%p", r_verify, (void*)original_verify_result);
+    void* r_verify = shadowhook_hook_func_addr(verify_addr, (void*)hooked_verify_result, (void**)&original_verify_result);
+    LOGI("  → result: %p, original=%p", r_verify, (void*)original_verify_result);
 
     // ====== Socket Hooks ======
     void* addr;
