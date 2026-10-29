@@ -5,13 +5,14 @@ import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedModuleInterface;
 
+import java.io.File;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.lang.reflect.Modifier;
 
 public class MainModule extends XposedModule {
     private static final String TAG = "NativeCryptoHook";
     private static final String TARGET_PACKAGE = "jp.konami.pesam";
+    private static final String NATIVE_LIB_PATH = "/data/user/0/" + TARGET_PACKAGE + "/cache/libnative_hook.so";
 
     public MainModule() {
         super();
@@ -23,6 +24,25 @@ public class MainModule extends XposedModule {
 
         Log.i(TAG, "Target package ready. Installing hooks...");
 
+        // ====================================================
+        // 1. تحميل المكتبة الأصلية أولاً (الأهم!)
+        // ====================================================
+        try {
+            File soFile = new File(NATIVE_LIB_PATH);
+            if (soFile.exists()) {
+                Log.i(TAG, "Loading native library: " + NATIVE_LIB_PATH);
+                System.load(NATIVE_LIB_PATH);
+                Log.i(TAG, "✅ Native library loaded successfully");
+            } else {
+                Log.e(TAG, "❌ Native library not found: " + NATIVE_LIB_PATH);
+            }
+        } catch (Throwable t) {
+            Log.e(TAG, "❌ Failed to load native library: " + t.getMessage(), t);
+        }
+
+        // ====================================================
+        // 2. الحصول على ClassLoader اللعبة
+        // ====================================================
         ClassLoader gameClassLoader = getGameClassLoader(param);
         if (gameClassLoader == null) {
             Log.e(TAG, "❌ Could not get game ClassLoader");
@@ -30,11 +50,11 @@ public class MainModule extends XposedModule {
         }
         Log.i(TAG, "Game ClassLoader: " + gameClassLoader);
 
-        // 1. اعتراضات للكشف عن CONFIGRULES_KEY
+        // ====================================================
+        // 3. تثبيت Java Hooks
+        // ====================================================
         hookClassGetDeclaredField();
         hookFieldGet(gameClassLoader);
-
-        // 2. اعتراضات على GameActivity
         hookGenerateAESKey(gameClassLoader);
         hookGetConfigRulesDecompressed(gameClassLoader);
     }
@@ -107,7 +127,7 @@ public class MainModule extends XposedModule {
                 public Object intercept(XposedInterface.Chain chain) throws Throwable {
                     Object thisField = chain.getThisObject();
                     if (!(thisField instanceof Field)) return chain.proceed();
-                    
+
                     Field f = (Field) thisField;
                     String name = f.getName();
                     String declaringClass = f.getDeclaringClass().getName();
