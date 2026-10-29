@@ -87,6 +87,29 @@ static size_t hooked_decrypt(void* this_ptr, const void* in, size_t in_len, void
 }
 
 // ============================================================
+//  SSL_get_verify_result Hook
+//  العنوان: 0x05708d14 (vaddr)
+//  الإزاحة من base: 0x2FA2814
+// ============================================================
+typedef int (*SSL_get_verify_result_func)(void* ssl);
+static SSL_get_verify_result_func original_verify_result = nullptr;
+static int verify_result_call_count = 0;
+
+static int hooked_verify_result(void* ssl) {
+    verify_result_call_count++;
+    int result = 0;
+    if (original_verify_result) {
+        result = original_verify_result(ssl);
+    }
+    LOGI("==================================================");
+    LOGI("[!!!] SSL_get_verify_result CALLED #%d", verify_result_call_count);
+    LOGI("  ssl=%p, original result=%d", ssl, result);
+    LOGI("  → returning 0 (SUCCESS, bypass verification)");
+    LOGI("==================================================");
+    return 0; // دائماً نجاح
+}
+
+// ============================================================
 //  Socket Hooks
 // ============================================================
 typedef ssize_t (*SendFunc)(int, const void*, size_t, int);
@@ -280,6 +303,13 @@ static void* install_hooks_thread(void* arg) {
     void* decrypt_addr = (void*)(base + 0x8c06a5c);
     LOGI("Hooking criAesDecryptor_Decrypt @ %p", decrypt_addr);
     shadowhook_hook_func_addr(decrypt_addr, (void*)hooked_decrypt, (void**)&original_decrypt);
+
+    // ====== SSL_get_verify_result Hook ======
+    // 0x05708d14 - 0x2866500 = 0x2FA2814
+    void* verify_addr = (void*)(base + 0x2FA2814);
+    LOGI("Hooking SSL_get_verify_result @ %p", verify_addr);
+    int r_verify = shadowhook_hook_func_addr(verify_addr, (void*)hooked_verify_result, (void**)&original_verify_result);
+    LOGI("  → result: %d, original=%p", r_verify, (void*)original_verify_result);
 
     // ====== Socket Hooks ======
     void* addr;
