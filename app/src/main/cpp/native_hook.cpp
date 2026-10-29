@@ -33,8 +33,35 @@ static uintptr_t get_module_base(const char* name) {
     return ctx.base;
 }
 
+static void dump_hex(const char* label, const void* ptr, size_t len, size_t max_len) {
+    if (!ptr || len == 0) { LOGI("%s: null", label); return; }
+    size_t n = (len < max_len) ? len : max_len;
+    char hex[1024] = {0};
+    const uint8_t* p = (const uint8_t*)ptr;
+    for (size_t i = 0; i < n; i++) sprintf(hex + (i * 2), "%02x", p[i]);
+    LOGI("%s [%zu bytes]: %s", label, len, hex);
+}
+
 // ============================================================
-//  Thread: تثبيت Hooks (اختبار: بدون أي hooks أصلية)
+//  AES Create Hook (اختبار فقط)
+// ============================================================
+typedef void* (*CreateFunc)(const void*, size_t, const void*, size_t);
+static CreateFunc original_create = nullptr;
+
+static void* hooked_create(const void* key, size_t key_len, const void* iv, size_t iv_len) {
+    LOGI("==================================================");
+    LOGI("[AES] criAesDecryptor_Create CALLED!");
+    LOGI("  key=%p (len=%zu), iv=%p (len=%zu)", key, key_len, iv, iv_len);
+    if (key && key_len > 0 && key_len <= 64) dump_hex("KEY", key, key_len, 32);
+    if (iv && iv_len > 0 && iv_len <= 64) dump_hex("IV", iv, iv_len, 16);
+    void* result = original_create ? original_create(key, key_len, iv, iv_len) : nullptr;
+    LOGI("  -> instance=%p", result);
+    LOGI("==================================================");
+    return result;
+}
+
+// ============================================================
+//  Thread: تثبيت Hooks (اختبار: AES Create فقط)
 // ============================================================
 static void* install_hooks_thread(void* arg) {
     LOGI("Waiting for libUE4.so...");
@@ -64,11 +91,17 @@ static void* install_hooks_thread(void* arg) {
     int init_r = shadowhook_init(SHADOWHOOK_MODE_UNIQUE, false);
     LOGI("shadowhook_init returned %d", init_r);
 
-    // ❌ لا تثبت أي hooks أصلية في هذه المرحلة
+    // ====== AES Create Hook فقط ======
+    void* create_addr = (void*)(base + 0x8c06138);
+    LOGI("Hooking criAesDecryptor_Create @ %p", create_addr);
+    shadowhook_hook_func_addr(create_addr, (void*)hooked_create, (void**)&original_create);
+    LOGI("  -> original_create=%p", (void*)original_create);
+
+    // ❌ لا تثبت hooks أخرى في هذه المرحلة
 
     LOGI("##################################################");
-    LOGI("TEST MODE: No native hooks installed.");
-    LOGI("If game runs, problem is in hooks. If crashes, problem is shadowhook_init.");
+    LOGI("TEST MODE: Only criAesDecryptor_Create hooked.");
+    LOGI("If game runs, add criAesDecryptor_Decrypt next.");
     LOGI("##################################################");
     return nullptr;
 }
